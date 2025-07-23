@@ -20,7 +20,7 @@ class LlamaCppServerEmbeddingModel:
         normalize_after_pooling: bool = False, 
         query_prefix: str = "Query: ", 
         document_prefix: str = "Passage: ", 
-        image_prefix: str = "Describe the image.<__image__>"
+        image_prefix: str = "<__image__>"
     ) -> None:
         self.server_url = server_url
         self.normalize_after_pooling = normalize_after_pooling
@@ -128,7 +128,8 @@ class LlamaCppServerEmbeddingModel:
                 start_idx = embedding_data["start_image_token_idx"]
                 end_idx = embedding_data["end_image_token_idx"]    
                 hidden_states = np.array(raw_embedding)
-                image_embeddings = hidden_states[start_idx:end_idx+1]  # +1 for inclusive end
+                # we need to capture <|vision_start|> ... <|vision_end|>
+                image_embeddings = hidden_states[start_idx:end_idx+1]  
                 pooled = image_embeddings.mean(axis=0)
                 print(f"🖼️ Image token indices: start={start_idx}, end={end_idx}")
                 print(f"🖼️ Extracted image embeddings shape: {image_embeddings.shape}")
