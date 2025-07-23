@@ -2,13 +2,64 @@ import json
 import os
 import signal
 import subprocess
-import time
 
 import click # type: ignore
-import requests # type: ignore
+import numpy as np # type: ignore
 from sklearn.metrics.pairwise import cosine_similarity # type: ignore
 
 from model import LlamaCppServerEmbeddingModel
+
+
+def clip_text(text: str, max_len: int = 10) -> str:
+    """Clip text to max_len characters, showing first part + '...' if needed"""
+    if len(text) <= max_len:
+        return text
+    return text[:max_len-3] + "..."
+
+
+def save_cosine_similarity_matrix(raw_lines: list[str], embeddings: np.ndarray, save_path: str) -> None:
+    """Save cosine similarity matrix as markdown table"""
+    # Extract display names from original texts  
+    display_names = []
+    for text in raw_lines:
+        if text.startswith('[QUERY] '):
+            content = text[8:]
+            display_names.append(f"Q:{clip_text(content)}")
+        elif text.startswith('[DOCUMENT] '):
+            content = text[11:]
+            display_names.append(f"D:{clip_text(content)}")
+        elif text.startswith('[IMAGE] '):
+            image_path = text[8:]
+            filename = os.path.basename(image_path)
+            display_names.append(f"I:{clip_text(filename)}")
+        else:
+            display_names.append(clip_text(text))
+    
+    # Compute cosine similarity matrix
+    similarity_matrix = cosine_similarity(embeddings)
+    
+    # Create markdown table
+    with open(save_path, 'w', encoding='utf-8') as f:
+        f.write("# Cosine Similarity Matrix\n\n")
+        
+        # Write header row
+        f.write("| Item |")
+        for name in display_names:
+            f.write(f" {name} |")
+        f.write("\n")
+        
+        # Write separator row
+        f.write("|" + "---|" * (len(display_names) + 1) + "\n")
+        
+        # Write data rows
+        for i, row_name in enumerate(display_names):
+            f.write(f"| {row_name} |")
+            for j in range(len(display_names)):
+                sim_score = similarity_matrix[i, j]
+                f.write(f" {sim_score:.3f} |")
+            f.write("\n")
+    
+    print(f"Saved cosine similarity matrix to {save_path}")
 
 
 @click.command()
@@ -49,37 +100,6 @@ def main(
     proc = subprocess.Popen(cmd, env=env)
 
     try:
-        print("Waiting for server to start...")
-        
-        # Health check - wait until server is ready
-        max_wait_time = 300  # 5 minutes
-        check_interval = 2   # 2 seconds
-        start_time = time.time()
-        
-        while True:
-            try:
-                # Test the actual embedding endpoint with a simple request
-                test_payload = {"content": "test"}
-                health_response = requests.post(f"http://{host}:{port}/embedding", json=test_payload, timeout=10)
-                if health_response.status_code == 200:
-                    print("✅ Server is ready!")
-                    break
-                elif health_response.status_code == 503:
-                    elapsed = time.time() - start_time
-                    print(f"⏳ Server still loading model... ({elapsed:.1f}s elapsed)")
-                else:
-                    elapsed = time.time() - start_time
-                    print(f"⚠️ Unexpected server response: {health_response.status_code} ({elapsed:.1f}s elapsed)")
-            except requests.exceptions.RequestException as e:
-                elapsed = time.time() - start_time
-                print(f"⏳ Waiting for server to start... ({elapsed:.1f}s elapsed)")
-            
-            # Check if we've exceeded max wait time
-            if time.time() - start_time > max_wait_time:
-                raise TimeoutError(f"Server did not become ready within {max_wait_time} seconds")
-            
-            time.sleep(check_interval)
-
         with open(input_path, 'r', encoding='utf-8') as f:
             raw_lines = [line.strip() for line in f if line.strip()]
         
@@ -93,6 +113,7 @@ def main(
             image_prefix=image_prefix
         )
 
+        model.wait_for_server()
         original_texts, embeddings = model.encode_from_lines(raw_lines)
 
         output_data = [
@@ -107,53 +128,7 @@ def main(
 
         # Save cosine similarity matrix if requested
         if save_cosine_sim_path:
-            def clip_text(text, max_len=10):
-                """Clip text to max_len characters, showing first part + '...' if needed"""
-                if len(text) <= max_len:
-                    return text
-                return text[:max_len-3] + "..."
-            
-            # Extract display names from original texts  
-            display_names = []
-            for i, text in enumerate(raw_lines):
-                if text.startswith('[QUERY] '):
-                    content = text[8:]
-                    display_names.append(f"Q:{clip_text(content)}")
-                elif text.startswith('[DOCUMENT] '):
-                    content = text[11:]
-                    display_names.append(f"D:{clip_text(content)}")
-                elif text.startswith('[IMAGE] '):
-                    image_path = text[8:]
-                    filename = os.path.basename(image_path)
-                    display_names.append(f"I:{clip_text(filename)}")
-                else:
-                    display_names.append(clip_text(text))
-            
-            # Compute cosine similarity matrix
-            similarity_matrix = cosine_similarity(embeddings)
-            
-            # Create markdown table
-            with open(save_cosine_sim_path, 'w', encoding='utf-8') as f:
-                f.write("# Cosine Similarity Matrix\n\n")
-                
-                # Write header row
-                f.write("| Item |")
-                for name in display_names:
-                    f.write(f" {name} |")
-                f.write("\n")
-                
-                # Write separator row
-                f.write("|" + "---|" * (len(display_names) + 1) + "\n")
-                
-                # Write data rows
-                for i, row_name in enumerate(display_names):
-                    f.write(f"| {row_name} |")
-                    for j in range(len(display_names)):
-                        sim_score = similarity_matrix[i, j]
-                        f.write(f" {sim_score:.3f} |")
-                    f.write("\n")
-            
-            print(f"Saved cosine similarity matrix to {save_cosine_sim_path}")
+            save_cosine_similarity_matrix(raw_lines, embeddings, save_cosine_sim_path)
 
     finally:
         print("Shutting down server...")

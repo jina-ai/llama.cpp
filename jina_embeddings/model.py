@@ -1,5 +1,6 @@
 import base64
 import os
+import time
 from typing import List, Optional, Tuple
 
 import numpy as np # type: ignore
@@ -26,6 +27,25 @@ class LlamaCppServerEmbeddingModel:
         self.query_prefix = query_prefix
         self.document_prefix = document_prefix
         self.image_prefix = image_prefix
+
+    def wait_for_server(self, max_wait_time: int = 300, check_interval: int = 2) -> None:
+        """Wait for the server to be ready"""
+        print("Waiting for server to start...")
+        test_payload = {"content": "test"}
+
+        start_time = time.time()
+        while True:
+            elapsed = time.time() - start_time
+            if elapsed > max_wait_time:
+                raise TimeoutError(f"Server did not become ready within {max_wait_time} seconds")
+            try:
+                r = requests.post(f"{self.server_url}/embedding", json=test_payload, timeout=10)
+                assert r.status_code == 200, f"Server not ready: {r.status_code}"
+                print("✅ Server is ready!")
+                break
+            except (requests.exceptions.RequestException, AssertionError):
+                print(f"⏳ Waiting for server to start... ({elapsed:.1f}s elapsed)")
+                time.sleep(check_interval)
 
     def _parse_line(self, line: str) -> Tuple[str, EmbeddingRequestItem]:
         """Parse input line and return (original_content, EmbeddingRequestItem)"""
@@ -77,23 +97,25 @@ class LlamaCppServerEmbeddingModel:
         embeddings = []
 
         for i, item in enumerate(items):
-            payload = {"content": item["content"], "image": item["image"]}
+            payload = {"content": item["content"]}
+            if item["image"]:
+                payload["image"] = item["image"]
+                
             is_image_request = item["image"] is not None
             response = requests.post(f"{self.server_url}/embedding", json=payload)
             assert response.status_code == 200, f"Server error: {response.text}"
             embedding_data = response.json()
+            raw_embedding = embedding_data["embedding"]
 
+            # TODO: optional enable logging via argument
             print(f"\n==========================")
             print(f"🧠 Item {i + 1} embedding response")
             print(f"📦 Type: {type(embedding_data).__name__}")
             print(f"🔑 Keys: {list(embedding_data.keys())}")
             print(f"🔎 Preview: {repr(embedding_data)[:500]}")
-            print(f"==========================")
-
-            raw_embedding = embedding_data["embedding"]
-            
             print(f"🔍 Raw embedding type: {type(raw_embedding)}")
             print(f"🔍 Raw embedding shape: {np.array(raw_embedding).shape}")
+            print(f"==========================")
             
             # Check if embeddings are already normalized
             embedding_array = np.array(raw_embedding)
@@ -104,27 +126,18 @@ class LlamaCppServerEmbeddingModel:
             # Handle image token extraction
             if is_image_request:
                 start_idx = embedding_data["start_image_token_idx"]
-                end_idx = embedding_data["end_image_token_idx"]
-                
-                print(f"🖼️ Image token indices: start={start_idx}, end={end_idx}")
-                
-                # Token-level embeddings - extract only image tokens
+                end_idx = embedding_data["end_image_token_idx"]    
                 hidden_states = np.array(raw_embedding)
                 image_embeddings = hidden_states[start_idx:end_idx+1]  # +1 for inclusive end
-                
+                pooled = image_embeddings.mean(axis=0)
+                print(f"🖼️ Image token indices: start={start_idx}, end={end_idx}")
                 print(f"🖼️ Extracted image embeddings shape: {image_embeddings.shape}")
                 print(f"🖼️ Original total embeddings: {len(raw_embedding)}")
                 print(f"🖼️ Image embeddings extracted: {len(image_embeddings)}")
-                
-                # Pool only the image embeddings (always mean pool)
-                pooled = image_embeddings.mean(axis=0)
-                print(f"🖼️ Using mean pooling of image tokens")
-                    
             else:
                 # Regular text processing - always mean pool the tokens
                 hidden_states = np.array(raw_embedding)
                 pooled = hidden_states.mean(axis=0)
-                print(f"📊 Applied mean pooling")
 
             # Optional normalization
             if self.normalize_after_pooling:
