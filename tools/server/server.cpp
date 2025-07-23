@@ -2617,9 +2617,19 @@ struct server_context {
         int pooling_type = llama_pooling_type(slot.ctx);
         printf("pooling_type = %d (NONE=%d)\n", pooling_type, LLAMA_POOLING_TYPE_NONE);
 
+        // Only support token-level embeddings - no pooling
+        if (pooling_type != LLAMA_POOLING_TYPE_NONE) {
+            printf("ERROR: Pooling is not supported for embeddings\n");
+            printf("=== send_embedding END (ERROR) ===\n");
+            
+            // Send error response
+            send_error(slot, "pooling is not supported for embeddings - use token-level embeddings only", ERROR_TYPE_SERVER);
+            return;
+        }
+
         if (slot.has_stored_embeddings) {
             // *** MULTIMODAL EMBEDDING ASSEMBLY ***
-            printf("ASSEMBLY: Multimodal embedding - combining all parts\n");
+            printf("ASSEMBLY: Multimodal embedding - combining all parts (token-level only)\n");
             
             // Part 1: Pre-image text embeddings
             for (const auto& pre_embd : slot.stored_pre_image_embeddings) {
@@ -2641,86 +2651,55 @@ struct server_context {
             // *** SET IMAGE END INDEX ***
             res->end_image_token_idx = slot.stored_pre_image_embeddings.size() + slot.stored_image_embeddings.size() - 1;
             
-            // Part 3: Post-image text embeddings (current batch)
-            if (pooling_type != LLAMA_POOLING_TYPE_NONE) {
-                printf("ASSEMBLY: Using sequence-level pooling for post-image text\n");
-                const float * embd = llama_get_embeddings_seq(ctx, slot.id);
-                if (embd != nullptr) {
-                    std::vector<float> embd_res(n_embd);
-                    common_embd_normalize(embd, embd_res.data(), n_embd, 2);
-                    res->embedding.push_back(embd_res);
-                    printf("ASSEMBLY: Added pooled post-image embedding\n");
-                } else {
-                    printf("ASSEMBLY: ERROR - llama_get_embeddings_seq returned NULL for post-image!\n");
-                }
-            } else {
-                printf("ASSEMBLY: Using token-level embeddings for post-image text\n");
-                int post_image_embeddings = 0;
-                
-                // For multimodal, we need to get embeddings from the current batch
-                for (int pos = 0; pos < batch.n_tokens; ++pos) {
-                    const float * embd = llama_get_embeddings_ith(ctx, pos);
-                    if (embd != nullptr) {
-                        res->embedding.emplace_back(embd, embd + n_embd);
-                        post_image_embeddings++;
-                        if (pos < 3) {
-                            printf("ASSEMBLY: Found post-image embedding at batch pos %d\n", pos);
-                        }
-                    } else {
-                        if (pos < 3) {
-                            printf("ASSEMBLY: No post-image embedding at batch pos %d\n", pos);
-                        }
-                    }
-                }
-                printf("ASSEMBLY: Added %d post-image embeddings from current batch\n", post_image_embeddings);
-            }
+            // Part 3: Post-image text embeddings (current batch) - token-level only
+            printf("ASSEMBLY: Using token-level embeddings for post-image text\n");
+            int post_image_embeddings = 0;
             
-            printf("ASSEMBLY: Total multimodal embeddings: %zu (pre:%zu + img:%zu + post:current)\n",
+            for (int pos = 0; pos < batch.n_tokens; ++pos) {
+                const float * embd = llama_get_embeddings_ith(ctx, pos);
+                if (embd == nullptr) {
+                    printf("ERROR: Missing post-image embedding at batch pos %d\n", pos);
+                    send_error(slot, "missing post-image embedding at position " + std::to_string(pos), ERROR_TYPE_SERVER);
+                    return;
+                }
+                
+                res->embedding.emplace_back(embd, embd + n_embd);
+                post_image_embeddings++;
+                if (pos < 3) {
+                    printf("ASSEMBLY: Found post-image embedding at batch pos %d\n", pos);
+                }
+            }
+            printf("ASSEMBLY: Added %d post-image embeddings from current batch\n", post_image_embeddings);
+            
+            printf("ASSEMBLY: Total multimodal embeddings: %zu (pre:%zu + img:%zu + post:%d)\n",
                 res->embedding.size(),
                 slot.stored_pre_image_embeddings.size(),
-                slot.stored_image_embeddings.size());
+                slot.stored_image_embeddings.size(),
+                post_image_embeddings);
             
             printf("ASSEMBLY: Image token indices: start=%d, end=%d\n", 
                 res->start_image_token_idx, res->end_image_token_idx);
 
         } else {
-            // *** REGULAR TEXT-ONLY EMBEDDING (UNCHANGED LOGIC) ***
-            printf("ASSEMBLY: Text-only embedding - using existing logic\n");
+            // *** REGULAR TEXT-ONLY EMBEDDING - TOKEN-LEVEL ONLY ***
+            printf("ASSEMBLY: Text-only embedding - token-level only\n");
             
-            if (pooling_type != LLAMA_POOLING_TYPE_NONE) {
-                printf("Using sequence-level pooling\n");
-                // Sequence-level pooling - get the pooled embedding for the entire sequence
-                const float * embd = llama_get_embeddings_seq(ctx, slot.id);
-                printf("llama_get_embeddings_seq returned: %p\n", (void*)embd);
+            int embeddings_found = 0;
+            for (int pos = 0; pos < slot.n_past; ++pos) {
+                const float * embd = llama_get_embeddings_ith(ctx, pos);
+                if (embd == nullptr) {
+                    printf("ERROR: Missing text embedding at pos %d\n", pos);
+                    send_error(slot, "missing text embedding at position " + std::to_string(pos), ERROR_TYPE_SERVER);
+                    return;
+                }
                 
-                if (embd != nullptr) {
-                    std::vector<float> embd_res(n_embd);
-                    common_embd_normalize(embd, embd_res.data(), n_embd, 2);
-                    res->embedding.push_back(embd_res);
-                    printf("Added pooled embedding, size = %zu\n", embd_res.size());
-                } else {
-                    printf("ERROR: llama_get_embeddings_seq returned NULL!\n");
+                res->embedding.emplace_back(embd, embd + n_embd);
+                embeddings_found++;
+                if (pos < 3 || pos >= slot.n_past - 3) {
+                    printf("Found embedding at pos %d\n", pos);
                 }
-            } else {
-                printf("Using token-level embeddings\n");
-                // Token-level embeddings - get embeddings for each position in the sequence
-                int embeddings_found = 0;
-                for (int pos = 0; pos < slot.n_past; ++pos) {
-                    const float * embd = llama_get_embeddings_ith(ctx, pos);
-                    if (embd != nullptr) {
-                        res->embedding.emplace_back(embd, embd + n_embd);
-                        embeddings_found++;
-                        if (pos < 5 || pos >= slot.n_past - 5) {
-                            printf("Found embedding at pos %d\n", pos);
-                        }
-                    } else {
-                        if (pos < 5 || pos >= slot.n_past - 5) {
-                            printf("No embedding at pos %d\n", pos);
-                        }
-                    }
-                }
-                printf("Total embeddings found: %d out of %d positions\n", embeddings_found, slot.n_past);
             }
+            printf("Total embeddings found: %d out of %d positions\n", embeddings_found, slot.n_past);
         }
 
         printf("Final embedding count: %zu\n", res->embedding.size());
@@ -4806,8 +4785,43 @@ int main(int argc, char ** argv) {
 			
 			printf("EMBEDDINGS: mtmd_tokenize succeeded\n");
 			
+			// Debug: Check chunks before creating server_tokens
+			printf("EMBEDDINGS: Checking chunks before server_tokens creation\n");
+			if (!chunks.ptr) {
+				printf("EMBEDDINGS: ERROR - chunks.ptr is null!\n");
+				throw std::runtime_error("chunks.ptr is null after mtmd_tokenize");
+			}
+			
 			server_tokens tmp(chunks, true);
-			printf("EMBEDDINGS: Created server_tokens\n");
+			printf("EMBEDDINGS: Created server_tokens, size: %zu\n", tmp.size());
+			
+			// Debug: Print tokens and IDs for multimodal
+			printf("EMBEDDINGS: Token debug for multimodal input:\n");
+			for (size_t i = 0; i < tmp.size(); i++) {
+				llama_token token_id = tmp[i];
+				
+				// Skip -1 tokens (image placeholders handled by KV cache)
+				if (token_id == -1) {
+					printf("  Token[%zu]: ID=-1, Text=\"<image_placeholder>\"\n", i);
+					continue;
+				}
+				
+				// Skip other negative token IDs
+				if (token_id < 0) {
+					printf("  Token[%zu]: ID=%d, Text=\"<invalid_negative_token>\"\n", i, token_id);
+					continue;
+				}
+				
+				char token_buf[256];
+				int32_t len = llama_token_to_piece(ctx_server.vocab, token_id, token_buf, sizeof(token_buf), 0, true);
+				if (len > 0 && len < (int32_t)sizeof(token_buf)) {
+					token_buf[len] = '\0';
+					printf("  Token[%zu]: ID=%d, Text=\"%s\"\n", i, token_id, token_buf);
+				} else {
+					printf("  Token[%zu]: ID=%d, Text=\"<error_len=%d>\"\n", i, token_id, len);
+				}
+			}
+			
 			inputs.push_back(std::move(tmp));
 			
 		} else {
@@ -4816,8 +4830,24 @@ int main(int argc, char ** argv) {
 			auto tokenized_prompts = tokenize_input_prompts(ctx_server.vocab, prompt, true, true);
 			printf("EMBEDDINGS: Tokenized %zu prompts\n", tokenized_prompts.size());
 			
-			for (auto & p : tokenized_prompts) {
-				printf("EMBEDDINGS: Prompt tokens: %zu\n", p.size());
+			for (size_t prompt_idx = 0; prompt_idx < tokenized_prompts.size(); prompt_idx++) {
+				auto & p = tokenized_prompts[prompt_idx];
+				printf("EMBEDDINGS: Prompt %zu tokens: %zu\n", prompt_idx, p.size());
+				
+				// Debug: Print tokens and IDs for non-multimodal
+				printf("EMBEDDINGS: Token debug for prompt %zu:\n", prompt_idx);
+				for (size_t i = 0; i < p.size(); i++) {
+					llama_token token_id = p[i];
+					char token_buf[256];
+					int32_t len = llama_token_to_piece(ctx_server.vocab, token_id, token_buf, sizeof(token_buf), 0, true);
+					if (len > 0 && len < (int32_t)sizeof(token_buf)) {
+						token_buf[len] = '\0';
+						printf("  Token[%zu]: ID=%d, Text=\"%s\"\n", i, token_id, token_buf);
+					} else {
+						printf("  Token[%zu]: ID=%d, Text=\"<error>\"\n", i, token_id);
+					}
+				}
+				
 				auto tmp = server_tokens(p, ctx_server.mctx != nullptr);
 				inputs.push_back(std::move(tmp));
 			}

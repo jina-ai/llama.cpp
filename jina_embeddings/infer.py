@@ -76,7 +76,7 @@ def save_cosine_similarity_matrix(raw_lines: list[str], embeddings: np.ndarray, 
 @click.option('--save-cosine-sim-path', help='Path to save cosine similarity matrix as markdown table')
 @click.option('--query-prefix', default='Query: ', help='Prefix for [QUERY] lines')
 @click.option('--document-prefix', default='Passage: ', help='Prefix for [DOCUMENT] lines')
-@click.option('--image-prefix', default='Describe the image.<__image__>', help='Prefix for [IMAGE] lines')
+@click.option('--image-prefix', default='<|im_start|>user\n<__image__>Describe the image.<|im_end|>\n', help='Prefix for [IMAGE] lines')
 def main(
     llama_bin, model, mmproj, port, host, ngl, gpus,
     input_path, output_path,
