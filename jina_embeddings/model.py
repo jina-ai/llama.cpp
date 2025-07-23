@@ -129,7 +129,7 @@ class LlamaCppServerEmbeddingModel:
                 end_idx = embedding_data["end_image_token_idx"]    
                 hidden_states = np.array(raw_embedding)
                 # we need to capture <|vision_start|> ... <|vision_end|>
-                image_embeddings = hidden_states[start_idx:end_idx+1]  
+                image_embeddings = hidden_states[start_idx-1:end_idx+2]  
                 pooled = image_embeddings.mean(axis=0)
                 print(f"🖼️ Image token indices: start={start_idx}, end={end_idx}")
                 print(f"🖼️ Extracted image embeddings shape: {image_embeddings.shape}")
