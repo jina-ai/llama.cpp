@@ -2283,6 +2283,7 @@ struct server_context {
     }
 
     void kv_cache_clear() {
+        printf("Clearing KV cache\n");
         SRV_DBG("%s", "clearing KV cache\n");
 
         // clear the entire KV cache
@@ -3059,6 +3060,7 @@ struct server_context {
     }
 
     void update_slots() {
+
         // check if all slots are idle
         {
             bool all_idle = true;
@@ -3199,19 +3201,6 @@ struct server_context {
 
                         SLT_INF(slot, "new prompt, n_ctx_slot = %d, n_keep = %d, n_prompt_tokens = %d\n", slot.n_ctx, slot.params.n_keep, slot.n_prompt_tokens);
 
-                        // print prompt tokens (for debugging)
-                        /*if (1) {
-                            // first 16 tokens (avoid flooding logs)
-                            for (int i = 0; i < std::min<int>(16, prompt_tokens.size()); i++) {
-                                SLT_DBG(slot, "prompt token %3d: %6d '%s'\n", i, prompt_tokens[i], common_token_to_piece(ctx, prompt_tokens[i]).c_str());
-                            }
-                        } else {
-                            // all
-                            for (int i = 0; i < (int) prompt_tokens.size(); i++) {
-                                SLT_DBG(slot, "prompt token %3d: %6d '%s'\n", i, prompt_tokens[i], common_token_to_piece(ctx, prompt_tokens[i]).c_str());
-                            }
-                        }*/
-
                         // empty prompt passed -> release the slot and send empty response
                         if (prompt_tokens.empty()) {
                             SLT_WRN(slot, "%s", "empty prompt - releasing slot\n");
@@ -3230,6 +3219,9 @@ struct server_context {
                         }
 
                         if (!slot.can_split()) {
+
+                            printf("slot cannot split lmao\n");
+
                             if (slot.n_prompt_tokens > n_ubatch) {
                                 slot.release();
                                 send_error(slot, "input is too large to process. increase the physical batch size", ERROR_TYPE_SERVER);
@@ -3242,6 +3234,7 @@ struct server_context {
                                 continue;
                             }
                         } else {
+                            
                             if (!params_base.ctx_shift) {
                                 // if context shift is disabled, we make sure prompt size is smaller than KV size
                                 // TODO: there should be a separate parameter that control prompt truncation
@@ -3383,7 +3376,6 @@ struct server_context {
                     if (!llama_memory_seq_rm(llama_get_memory(ctx), slot.id, slot.n_past, -1)) {
                         // could not partially delete (likely using a non-Transformer model)
                         llama_memory_seq_rm(llama_get_memory(ctx), slot.id, -1, -1);
-
                         // there is no common part left
                         slot.n_past = 0;
                     }
@@ -3391,7 +3383,7 @@ struct server_context {
                     SLT_INF(slot, "kv cache rm [%d, end)\n", slot.n_past);
 
                     // remove the non-common part from the cache
-                    slot.cache_tokens.keep_first(slot.n_past);
+                    // slot.cache_tokens.keep_first(slot.n_past);
 
                     // check if we should process the image
                     if (slot.n_past < slot.n_prompt_tokens && slot.prompt_tokens[slot.n_past] == LLAMA_TOKEN_NULL) {
@@ -3408,6 +3400,7 @@ struct server_context {
                             const int n_embd = llama_model_n_embd(model);
                             int image_embeddings_found = 0;
                             
+                            // TODO: don't use upper bound, use numnber of image embeddings in the chunk
                             for (int batch_pos = 0; batch_pos < 512; batch_pos++) { // reasonable upper bound
                                 const float * embd = llama_get_embeddings_ith(ctx, batch_pos);
                                 if (embd != nullptr) {
@@ -3434,8 +3427,10 @@ struct server_context {
                         }
 
                         // add the image chunk to cache
+                        // TODO: is it right to add the chunk as n_past ? 
                         {
                             const auto & chunk = slot.prompt_tokens.find_chunk(slot.n_past);
+                            // TODO: print the chunk content a bit
                             slot.cache_tokens.push_back(chunk.get()); // copy
                         }
 
@@ -3460,12 +3455,11 @@ struct server_context {
                         slot.n_past++;
                     }
 
-                    // SLT_INF(slot, "new cache_tokens: %s\n", slot.cache_tokens.str().c_str());
-
                     SLT_INF(slot, "prompt processing progress, n_past = %d, n_tokens = %d, progress = %f\n", slot.n_past, batch.n_tokens, (float) slot.n_prompt_tokens_processed / slot.n_prompt_tokens);
 
                     // entire prompt has been processed
                     if (slot.n_past == slot.n_prompt_tokens) {
+                        printf("Entire prompt has been processed\n");
                         slot.state = SLOT_STATE_DONE_PROMPT;
 
                         GGML_ASSERT(batch.n_tokens > 0);
@@ -4379,6 +4373,7 @@ int main(int argc, char ** argv) {
                                                     &inp_txt,
                                                     bitmaps_c_ptr.data(),
                                                     bitmaps_c_ptr.size());
+
                 if (tokenized != 0) {
                     throw std::runtime_error("Failed to tokenize prompt");
                 }
@@ -4713,203 +4708,551 @@ int main(int argc, char ** argv) {
     };
 
     // new embeddings implementation
+    // const auto handle_embeddings_impl = [&ctx_server, &res_error, &res_ok](
+	// 		const httplib::Request & req, 
+	// 		httplib::Response & res,
+	// 		const std::vector<raw_buffer> & files,
+	// 		oaicompat_type oaicompat) -> void {
+		
+	// 	const json data = json::parse(req.body);
+	// 	const auto & prompt = oaicompat ? data.at("prompt") : data.at("content");
+		
+	// 	printf("EMBEDDINGS: Processing prompt with %zu files\n", files.size());
+		
+	// 	// Process files
+	// 	mtmd::bitmaps bitmaps;
+	// 	const bool has_mtmd = ctx_server.mctx != nullptr;
+		
+	// 	printf("EMBEDDINGS: Multimodal context available: %s\n", has_mtmd ? "YES" : "NO");
+		
+	// 	if (!has_mtmd && !files.empty()) {
+	// 		throw std::runtime_error("This server does not support multimodal");
+	// 	}
+		
+	// 	for (size_t i = 0; i < files.size(); i++) {
+	// 		printf("EMBEDDINGS: Processing file %zu, size: %zu bytes\n", i, files[i].size());
+	// 		mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_buf(ctx_server.mctx, files[i].data(), files[i].size()));
+	// 		if (!bmp.ptr) {
+	// 			throw std::runtime_error("Failed to load image or audio file");
+	// 		}
+	// 		std::string hash = fnv_hash(bmp.data(), bmp.n_bytes());
+	// 		bmp.set_id(hash.c_str());
+	// 		printf("EMBEDDINGS: File %zu processed, hash: %s\n", 
+	// 			   i, hash.c_str());
+	// 		bitmaps.entries.push_back(std::move(bmp));
+	// 	}
+
+	// 	// Process prompt
+	// 	std::vector<server_tokens> inputs;
+		
+	// 	if (has_mtmd && !files.empty()) {
+	// 		// multimodal tokenization
+	// 		std::string prompt_str;
+	// 		if (prompt.is_string()) {
+	// 			prompt_str = prompt.get<std::string>();
+	// 		} else {
+	// 			prompt_str = prompt.dump();
+	// 		}
+			
+	// 		printf("EMBEDDINGS: Tokenizing multimodal prompt: \"%.100s%s\"\n", 
+	// 			   prompt_str.c_str(), prompt_str.length() > 100 ? "..." : "");
+			
+	// 		mtmd_input_text inp_txt = {
+	// 			prompt_str.c_str(),
+	// 			/* add_special */   true,
+	// 			/* parse_special */ true,
+	// 		};
+	// 		mtmd::input_chunks chunks(mtmd_input_chunks_init());
+	// 		auto bitmaps_c_ptr = bitmaps.c_ptr();
+			
+	// 		printf("EMBEDDINGS: Calling mtmd_tokenize with %zu bitmaps\n", bitmaps_c_ptr.size());
+			
+	// 		int32_t tokenized = mtmd_tokenize(ctx_server.mctx,
+	// 										  chunks.ptr.get(),
+	// 										  &inp_txt,
+	// 										  bitmaps_c_ptr.data(),
+	// 										  bitmaps_c_ptr.size());
+			
+	// 		if (tokenized != 0) {
+	// 			printf("EMBEDDINGS: mtmd_tokenize failed with error: %d\n", tokenized);
+	// 			throw std::runtime_error("Failed to tokenize prompt");
+	// 		}
+			
+	// 		printf("EMBEDDINGS: mtmd_tokenize succeeded\n");
+			
+	// 		// Debug: Check chunks before creating server_tokens
+	// 		printf("EMBEDDINGS: Checking chunks before server_tokens creation\n");
+	// 		if (!chunks.ptr) {
+	// 			printf("EMBEDDINGS: ERROR - chunks.ptr is null!\n");
+	// 			throw std::runtime_error("chunks.ptr is null after mtmd_tokenize");
+	// 		}
+			
+	// 		server_tokens tmp(chunks, true);
+	// 		printf("EMBEDDINGS: Created server_tokens, size: %zu\n", tmp.size());
+			
+	// 		// Debug: Print tokens and IDs for multimodal
+	// 		printf("EMBEDDINGS: Token debug for multimodal input:\n");
+	// 		for (size_t i = 0; i < tmp.size(); i++) {
+	// 			llama_token token_id = tmp[i];
+				
+	// 			// Skip -1 tokens (image placeholders handled by KV cache)
+	// 			if (token_id == -1) {
+	// 				printf("  Token[%zu]: ID=-1, Text=\"<image_placeholder>\"\n", i);
+	// 				continue;
+	// 			}
+				
+	// 			// Skip other negative token IDs
+	// 			if (token_id < 0) {
+	// 				printf("  Token[%zu]: ID=%d, Text=\"<invalid_negative_token>\"\n", i, token_id);
+	// 				continue;
+	// 			}
+				
+	// 			char token_buf[256];
+	// 			int32_t len = llama_token_to_piece(ctx_server.vocab, token_id, token_buf, sizeof(token_buf), 0, true);
+	// 			if (len > 0 && len < (int32_t)sizeof(token_buf)) {
+	// 				token_buf[len] = '\0';
+	// 				printf("  Token[%zu]: ID=%d, Text=\"%s\"\n", i, token_id, token_buf);
+	// 			} else {
+	// 				printf("  Token[%zu]: ID=%d, Text=\"<error_len=%d>\"\n", i, token_id, len);
+	// 			}
+	// 		}
+			
+	// 		inputs.push_back(std::move(tmp));
+			
+	// 	} else {
+	// 		// non-multimodal version
+	// 		printf("EMBEDDINGS: Using non-multimodal tokenization\n");
+	// 		auto tokenized_prompts = tokenize_input_prompts(ctx_server.vocab, prompt, true, true);
+	// 		printf("EMBEDDINGS: Tokenized %zu prompts\n", tokenized_prompts.size());
+			
+	// 		for (size_t prompt_idx = 0; prompt_idx < tokenized_prompts.size(); prompt_idx++) {
+	// 			auto & p = tokenized_prompts[prompt_idx];
+	// 			printf("EMBEDDINGS: Prompt %zu tokens: %zu\n", prompt_idx, p.size());
+				
+	// 			// Debug: Print tokens and IDs for non-multimodal
+	// 			printf("EMBEDDINGS: Token debug for prompt %zu:\n", prompt_idx);
+	// 			for (size_t i = 0; i < p.size(); i++) {
+	// 				llama_token token_id = p[i];
+	// 				char token_buf[256];
+	// 				int32_t len = llama_token_to_piece(ctx_server.vocab, token_id, token_buf, sizeof(token_buf), 0, true);
+	// 				if (len > 0 && len < (int32_t)sizeof(token_buf)) {
+	// 					token_buf[len] = '\0';
+	// 					printf("  Token[%zu]: ID=%d, Text=\"%s\"\n", i, token_id, token_buf);
+	// 				} else {
+	// 					printf("  Token[%zu]: ID=%d, Text=\"<error>\"\n", i, token_id);
+	// 				}
+	// 			}
+				
+	// 			auto tmp = server_tokens(p, ctx_server.mctx != nullptr);
+	// 			inputs.push_back(std::move(tmp));
+	// 		}
+	// 	}
+		
+	// 	printf("EMBEDDINGS: Total inputs created: %zu\n", inputs.size());
+		
+	// 	// Create embedding tasks
+	// 	std::vector<server_task> tasks;
+	// 	std::unordered_set<int> task_ids;
+		
+	// 	tasks.reserve(inputs.size());
+	// 	for (size_t i = 0; i < inputs.size(); i++) {
+	// 		server_task task = server_task(SERVER_TASK_TYPE_EMBEDDING);
+			
+	// 		task.id    = ctx_server.queue_tasks.get_new_id();
+	// 		task.index = i;
+			
+	// 		task.prompt_tokens    = std::move(inputs[i]);
+	// 		task.params           = server_task::params_from_json_cmpl(
+	// 				ctx_server.ctx,
+	// 				ctx_server.params_base,
+	// 				data);
+	// 		task.id_selected_slot = json_value(data, "id_slot", -1);
+			
+	// 		// OAI-compat
+	// 		task.params.oaicompat = oaicompat;
+			
+	// 		tasks.push_back(std::move(task));
+	// 	}
+		
+	// 	task_ids = server_task::get_list_id(tasks);
+	// 	ctx_server.queue_results.add_waiting_tasks(tasks);
+	// 	ctx_server.queue_tasks.post(std::move(tasks));
+		
+	// 	printf("EMBEDDINGS: Posted %zu tasks to queue\n", tasks.size());
+		
+	// 	// Wait for results
+	// 	ctx_server.receive_multi_results(task_ids, [&](std::vector<server_task_result_ptr> & results) {
+	// 		if (results.size() == 1) {
+	// 			// single result
+	// 			printf("EMBEDDINGS: Returning single result\n");
+	// 			res_ok(res, results[0]->to_json());
+	// 		} else {
+	// 			// multiple results (multitask)
+	// 			printf("EMBEDDINGS: Returning %zu results\n", results.size());
+	// 			json arr = json::array();
+	// 			for (auto & res : results) {
+	// 				arr.push_back(res->to_json());
+	// 			}
+	// 			res_ok(res, arr);
+	// 		}
+	// 	}, [&](const json & error_data) {
+	// 		printf("EMBEDDINGS: Error occurred during processing\n");
+	// 		res_error(res, error_data);
+	// 	}, [&req]() {
+	// 		return !req.has_header("Connection") || req.get_header_value("Connection") != "keep-alive";
+	// 	});
+
+	// 	ctx_server.queue_results.remove_waiting_task_ids(task_ids);
+	// 	printf("EMBEDDINGS: Processing completed\n");
+	// };
+
+    // new embeddings implementation
     const auto handle_embeddings_impl = [&ctx_server, &res_error, &res_ok](
-			const httplib::Request & req, 
-			httplib::Response & res,
-			const std::vector<raw_buffer> & files,
-			oaicompat_type oaicompat) -> void {
-		
-		const json data = json::parse(req.body);
-		const auto & prompt = oaicompat ? data.at("prompt") : data.at("content");
-		
-		printf("EMBEDDINGS: Processing prompt with %zu files\n", files.size());
-		
-		// Process files
-		mtmd::bitmaps bitmaps;
-		const bool has_mtmd = ctx_server.mctx != nullptr;
-		
-		printf("EMBEDDINGS: Multimodal context available: %s\n", has_mtmd ? "YES" : "NO");
-		
-		if (!has_mtmd && !files.empty()) {
-			throw std::runtime_error("This server does not support multimodal");
-		}
-		
-		for (size_t i = 0; i < files.size(); i++) {
-			printf("EMBEDDINGS: Processing file %zu, size: %zu bytes\n", i, files[i].size());
-			mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_buf(ctx_server.mctx, files[i].data(), files[i].size()));
-			if (!bmp.ptr) {
-				throw std::runtime_error("Failed to load image or audio file");
-			}
-			std::string hash = fnv_hash(bmp.data(), bmp.n_bytes());
-			bmp.set_id(hash.c_str());
-			printf("EMBEDDINGS: File %zu processed, hash: %s\n", 
-				   i, hash.c_str());
-			bitmaps.entries.push_back(std::move(bmp));
-		}
+        const httplib::Request & req, 
+        httplib::Response & res,
+        const std::vector<raw_buffer> & files,
+        oaicompat_type oaicompat) -> void {
+    
+        const json data = json::parse(req.body);
+        const auto & prompt = oaicompat ? data.at("prompt") : data.at("content");
+        
+        printf("EMBEDDINGS: Processing prompt with %zu files\n", files.size());
+        
+        // Process files
+        mtmd::bitmaps bitmaps;
+        const bool has_mtmd = ctx_server.mctx != nullptr;
+        
+        printf("EMBEDDINGS: Multimodal context available: %s\n", has_mtmd ? "YES" : "NO");
+        
+        if (!has_mtmd && !files.empty()) {
+            throw std::runtime_error("This server does not support multimodal");
+        }
+        
+        // LOGGING: Open single file for all image processing data
+        FILE* image_log = fopen("/home/andrei/workspace/llama_cpp_image_processing.txt", "w");
+        if (image_log) {
+            fprintf(image_log, "=== LLAMA.CPP IMAGE PROCESSING LOG ===\n\n");
+        }
+        
+        for (size_t i = 0; i < files.size(); i++) {
+            printf("EMBEDDINGS: Processing file %zu, size: %zu bytes\n", i, files[i].size());
+            
+            mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_buf(ctx_server.mctx, files[i].data(), files[i].size()));
 
-		// Process prompt
-		std::vector<server_tokens> inputs;
-		
-		if (has_mtmd && !files.empty()) {
-			// multimodal tokenization
-			std::string prompt_str;
-			if (prompt.is_string()) {
-				prompt_str = prompt.get<std::string>();
-			} else {
-				prompt_str = prompt.dump();
-			}
-			
-			printf("EMBEDDINGS: Tokenizing multimodal prompt: \"%.100s%s\"\n", 
-				   prompt_str.c_str(), prompt_str.length() > 100 ? "..." : "");
-			
-			mtmd_input_text inp_txt = {
-				prompt_str.c_str(),
-				/* add_special */   true,
-				/* parse_special */ true,
-			};
-			mtmd::input_chunks chunks(mtmd_input_chunks_init());
-			auto bitmaps_c_ptr = bitmaps.c_ptr();
-			
-			printf("EMBEDDINGS: Calling mtmd_tokenize with %zu bitmaps\n", bitmaps_c_ptr.size());
-			
-			int32_t tokenized = mtmd_tokenize(ctx_server.mctx,
-											  chunks.ptr.get(),
-											  &inp_txt,
-											  bitmaps_c_ptr.data(),
-											  bitmaps_c_ptr.size());
-			
-			if (tokenized != 0) {
-				printf("EMBEDDINGS: mtmd_tokenize failed with error: %d\n", tokenized);
-				throw std::runtime_error("Failed to tokenize prompt");
-			}
-			
-			printf("EMBEDDINGS: mtmd_tokenize succeeded\n");
-			
-			// Debug: Check chunks before creating server_tokens
-			printf("EMBEDDINGS: Checking chunks before server_tokens creation\n");
-			if (!chunks.ptr) {
-				printf("EMBEDDINGS: ERROR - chunks.ptr is null!\n");
-				throw std::runtime_error("chunks.ptr is null after mtmd_tokenize");
-			}
-			
-			server_tokens tmp(chunks, true);
-			printf("EMBEDDINGS: Created server_tokens, size: %zu\n", tmp.size());
-			
-			// Debug: Print tokens and IDs for multimodal
-			printf("EMBEDDINGS: Token debug for multimodal input:\n");
-			for (size_t i = 0; i < tmp.size(); i++) {
-				llama_token token_id = tmp[i];
-				
-				// Skip -1 tokens (image placeholders handled by KV cache)
-				if (token_id == -1) {
-					printf("  Token[%zu]: ID=-1, Text=\"<image_placeholder>\"\n", i);
-					continue;
-				}
-				
-				// Skip other negative token IDs
-				if (token_id < 0) {
-					printf("  Token[%zu]: ID=%d, Text=\"<invalid_negative_token>\"\n", i, token_id);
-					continue;
-				}
-				
-				char token_buf[256];
-				int32_t len = llama_token_to_piece(ctx_server.vocab, token_id, token_buf, sizeof(token_buf), 0, true);
-				if (len > 0 && len < (int32_t)sizeof(token_buf)) {
-					token_buf[len] = '\0';
-					printf("  Token[%zu]: ID=%d, Text=\"%s\"\n", i, token_id, token_buf);
-				} else {
-					printf("  Token[%zu]: ID=%d, Text=\"<error_len=%d>\"\n", i, token_id, len);
-				}
-			}
-			
-			inputs.push_back(std::move(tmp));
-			
-		} else {
-			// non-multimodal version
-			printf("EMBEDDINGS: Using non-multimodal tokenization\n");
-			auto tokenized_prompts = tokenize_input_prompts(ctx_server.vocab, prompt, true, true);
-			printf("EMBEDDINGS: Tokenized %zu prompts\n", tokenized_prompts.size());
-			
-			for (size_t prompt_idx = 0; prompt_idx < tokenized_prompts.size(); prompt_idx++) {
-				auto & p = tokenized_prompts[prompt_idx];
-				printf("EMBEDDINGS: Prompt %zu tokens: %zu\n", prompt_idx, p.size());
-				
-				// Debug: Print tokens and IDs for non-multimodal
-				printf("EMBEDDINGS: Token debug for prompt %zu:\n", prompt_idx);
-				for (size_t i = 0; i < p.size(); i++) {
-					llama_token token_id = p[i];
-					char token_buf[256];
-					int32_t len = llama_token_to_piece(ctx_server.vocab, token_id, token_buf, sizeof(token_buf), 0, true);
-					if (len > 0 && len < (int32_t)sizeof(token_buf)) {
-						token_buf[len] = '\0';
-						printf("  Token[%zu]: ID=%d, Text=\"%s\"\n", i, token_id, token_buf);
-					} else {
-						printf("  Token[%zu]: ID=%d, Text=\"<error>\"\n", i, token_id);
-					}
-				}
-				
-				auto tmp = server_tokens(p, ctx_server.mctx != nullptr);
-				inputs.push_back(std::move(tmp));
-			}
-		}
-		
-		printf("EMBEDDINGS: Total inputs created: %zu\n", inputs.size());
-		
-		// Create embedding tasks
-		std::vector<server_task> tasks;
-		std::unordered_set<int> task_ids;
-		
-		tasks.reserve(inputs.size());
-		for (size_t i = 0; i < inputs.size(); i++) {
-			server_task task = server_task(SERVER_TASK_TYPE_EMBEDDING);
-			
-			task.id    = ctx_server.queue_tasks.get_new_id();
-			task.index = i;
-			
-			task.prompt_tokens    = std::move(inputs[i]);
-			task.params           = server_task::params_from_json_cmpl(
-					ctx_server.ctx,
-					ctx_server.params_base,
-					data);
-			task.id_selected_slot = json_value(data, "id_slot", -1);
-			
-			// OAI-compat
-			task.params.oaicompat = oaicompat;
-			
-			tasks.push_back(std::move(task));
-		}
-		
-		task_ids = server_task::get_list_id(tasks);
-		ctx_server.queue_results.add_waiting_tasks(tasks);
-		ctx_server.queue_tasks.post(std::move(tasks));
-		
-		printf("EMBEDDINGS: Posted %zu tasks to queue\n", tasks.size());
-		
-		// Wait for results
-		ctx_server.receive_multi_results(task_ids, [&](std::vector<server_task_result_ptr> & results) {
-			if (results.size() == 1) {
-				// single result
-				printf("EMBEDDINGS: Returning single result\n");
-				res_ok(res, results[0]->to_json());
-			} else {
-				// multiple results (multitask)
-				printf("EMBEDDINGS: Returning %zu results\n", results.size());
-				json arr = json::array();
-				for (auto & res : results) {
-					arr.push_back(res->to_json());
-				}
-				res_ok(res, arr);
-			}
-		}, [&](const json & error_data) {
-			printf("EMBEDDINGS: Error occurred during processing\n");
-			res_error(res, error_data);
-		}, [&req]() {
-			return !req.has_header("Connection") || req.get_header_value("Connection") != "keep-alive";
-		});
+            if (!bmp.ptr) {
+                throw std::runtime_error("Failed to load image or audio file");
+            }
+            
+            // LOGGING: Raw bitmap data
+            printf("EMBEDDINGS: Raw bitmap loaded - width: %d, height: %d\n", 
+                bmp.nx(), bmp.ny());
+            
+            if (image_log) {
+                fprintf(image_log, "FILE %zu RAW BITMAP:\n", i);
+                fprintf(image_log, "  Width: %d, Height: %d\n", bmp.nx(), bmp.ny());
+                fprintf(image_log, "  Total bytes: %zu\n", bmp.n_bytes());
+                
+                // Log first 100 raw uint8 pixel values (FIXED CASTING)
+                fprintf(image_log, "  First 100 raw uint8 pixel values:\n");
+                const uint8_t* uint8_data = (const uint8_t*)bmp.data();
+                int pixel_count = std::min(100, (int)bmp.n_bytes());
+                for (int j = 0; j < pixel_count; j++) {
+                    fprintf(image_log, "%d ", (int)uint8_data[j]);
+                    if ((j + 1) % 15 == 0) fprintf(image_log, "\n");
+                }
+                fprintf(image_log, "\n\n");
+            }
+            
+            // Log first 20 values to console too (FIXED CASTING)
+            printf("EMBEDDINGS: First 20 raw uint8 pixels: ");
+            const uint8_t* uint8_data = (const uint8_t*)bmp.data();
+            int console_count = std::min(20, (int)bmp.n_bytes());
+            for (int j = 0; j < console_count; j++) {
+                printf("%d ", (int)uint8_data[j]);
+            }
+            printf("\n");
+            
+            std::string hash = fnv_hash(bmp.data(), bmp.n_bytes());
+            bmp.set_id(hash.c_str());
+            printf("EMBEDDINGS: File %zu processed, hash: %s\n", 
+                i, hash.c_str());
+            
+            if (image_log) {
+                fprintf(image_log, "  Hash: %s\n\n", hash.c_str());
+            }
+            
+            bitmaps.entries.push_back(std::move(bmp));
+        }
 
-		ctx_server.queue_results.remove_waiting_task_ids(task_ids);
-		printf("EMBEDDINGS: Processing completed\n");
-	};
+        // Process prompt
+        std::vector<server_tokens> inputs;
+        
+        if (has_mtmd && !files.empty()) {
+            // multimodal tokenization
+            std::string prompt_str;
+            if (prompt.is_string()) {
+                prompt_str = prompt.get<std::string>();
+            } else {
+                prompt_str = prompt.dump();
+            }
+            
+            printf("EMBEDDINGS: Tokenizing multimodal prompt: \"%.100s%s\"\n", 
+                prompt_str.c_str(), prompt_str.length() > 100 ? "..." : "");
+            
+            if (image_log) {
+                fprintf(image_log, "MULTIMODAL TOKENIZATION:\n");
+                fprintf(image_log, "  Prompt: \"%.200s%s\"\n", 
+                    prompt_str.c_str(), prompt_str.length() > 200 ? "..." : "");
+            }
+            
+            mtmd_input_text inp_txt = {
+                prompt_str.c_str(),
+                /* add_special */   true,
+                /* parse_special */ true,
+            };
+            mtmd::input_chunks chunks(mtmd_input_chunks_init());
+            auto bitmaps_c_ptr = bitmaps.c_ptr();
+            
+            printf("EMBEDDINGS: Calling mtmd_tokenize with %zu bitmaps\n", bitmaps_c_ptr.size());
+            
+            if (image_log) {
+                fprintf(image_log, "  Calling mtmd_tokenize with %zu bitmaps\n", bitmaps_c_ptr.size());
+            }
+            
+            int32_t tokenized = mtmd_tokenize(ctx_server.mctx,
+                                            chunks.ptr.get(),
+                                            &inp_txt,
+                                            bitmaps_c_ptr.data(),
+                                            bitmaps_c_ptr.size());
+            
+            if (tokenized != 0) {
+                printf("EMBEDDINGS: mtmd_tokenize failed with error: %d\n", tokenized);
+                if (image_log) {
+                    fprintf(image_log, "  ERROR: mtmd_tokenize failed with error: %d\n", tokenized);
+                    fclose(image_log);
+                }
+                throw std::runtime_error("Failed to tokenize prompt");
+            }
+            
+            printf("EMBEDDINGS: mtmd_tokenize succeeded\n");
+            
+            // LOG THE ACTUAL IMAGE CHUNKS
+            printf("EMBEDDINGS: Analyzing input chunks...\n");
+            if (image_log) {
+                fprintf(image_log, "INPUT CHUNKS ANALYSIS:\n");
+                fprintf(image_log, "  Total chunks: %zu\n", mtmd_input_chunks_size(chunks.ptr.get()));
+            }
+
+            for (size_t chunk_idx = 0; chunk_idx < mtmd_input_chunks_size(chunks.ptr.get()); chunk_idx++) {
+                const mtmd_input_chunk* chunk = mtmd_input_chunks_get(chunks.ptr.get(), chunk_idx);
+                
+                if (mtmd_input_chunk_get_type(chunk) == MTMD_INPUT_CHUNK_TYPE_TEXT) {
+                    size_t n_tokens;
+                    mtmd_input_chunk_get_tokens_text(chunk, &n_tokens);
+                    printf("  Chunk[%zu]: TEXT, %zu tokens\n", chunk_idx, n_tokens);
+                    if (image_log) {
+                        fprintf(image_log, "  Chunk[%zu]: TEXT, %zu tokens\n", chunk_idx, n_tokens);
+                    }
+                } 
+                else if (mtmd_input_chunk_get_type(chunk) == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
+                    const mtmd_image_tokens* img_tokens = mtmd_input_chunk_get_tokens_image(chunk);
+                    printf("  Chunk[%zu]: IMAGE, %zux%zu tokens\n", chunk_idx, 
+                        mtmd_image_tokens_get_nx(img_tokens), mtmd_image_tokens_get_ny(img_tokens));
+                    printf("    Image ID: %s\n", mtmd_input_chunk_get_id(chunk));
+                    
+                    if (image_log) {
+                        fprintf(image_log, "  Chunk[%zu]: IMAGE, %zux%zu tokens\n", chunk_idx,
+                            mtmd_image_tokens_get_nx(img_tokens), mtmd_image_tokens_get_ny(img_tokens));
+                        fprintf(image_log, "    Image ID: %s\n", mtmd_input_chunk_get_id(chunk));
+                    }
+                }
+            }
+            
+            if (image_log) {
+                fprintf(image_log, "  mtmd_tokenize succeeded\n");
+                fprintf(image_log, "  Image processing completed - patches should be in ViT cache\n\n");
+            }
+            
+            // Debug: Check chunks before creating server_tokens
+            printf("EMBEDDINGS: Checking chunks before server_tokens creation\n");
+            if (!chunks.ptr) {
+                printf("EMBEDDINGS: ERROR - chunks.ptr is null!\n");
+                if (image_log) {
+                    fprintf(image_log, "  ERROR: chunks.ptr is null!\n");
+                    fclose(image_log);
+                }
+                throw std::runtime_error("chunks.ptr is null after mtmd_tokenize");
+            }
+            
+            server_tokens tmp(chunks, true);
+            printf("EMBEDDINGS: Created server_tokens, size: %zu\n", tmp.size());
+            
+            if (image_log) {
+                fprintf(image_log, "TOKEN ANALYSIS:\n");
+                fprintf(image_log, "  Created server_tokens, size: %zu\n", tmp.size());
+            }
+            
+            // Debug: Print tokens and IDs for multimodal
+            printf("EMBEDDINGS: Token debug for multimodal input:\n");
+            if (image_log) {
+                fprintf(image_log, "  Token details:\n");
+            }
+            
+            for (size_t i = 0; i < tmp.size(); i++) {
+                llama_token token_id = tmp[i];
+                
+                // Skip -1 tokens (image placeholders handled by KV cache)
+                if (token_id == -1) {
+                    printf("  Token[%zu]: ID=-1, Text=\"<image_placeholder>\"\n", i);
+                    if (image_log) {
+                        fprintf(image_log, "    Token[%zu]: ID=-1, Text=\"<image_placeholder>\"\n", i);
+                    }
+                    continue;
+                }
+                
+                // Skip other negative token IDs
+                if (token_id < 0) {
+                    printf("  Token[%zu]: ID=%d, Text=\"<invalid_negative_token>\"\n", i, token_id);
+                    if (image_log) {
+                        fprintf(image_log, "    Token[%zu]: ID=%d, Text=\"<invalid_negative_token>\"\n", i, token_id);
+                    }
+                    continue;
+                }
+                
+                char token_buf[256];
+                int32_t len = llama_token_to_piece(ctx_server.vocab, token_id, token_buf, sizeof(token_buf), 0, true);
+                if (len > 0 && len < (int32_t)sizeof(token_buf)) {
+                    token_buf[len] = '\0';
+                    printf("  Token[%zu]: ID=%d, Text=\"%s\"\n", i, token_id, token_buf);
+                    if (image_log) {
+                        fprintf(image_log, "    Token[%zu]: ID=%d, Text=\"%s\"\n", i, token_id, token_buf);
+                    }
+                } else {
+                    printf("  Token[%zu]: ID=%d, Text=\"<error_len=%d>\"\n", i, token_id, len);
+                    if (image_log) {
+                        fprintf(image_log, "    Token[%zu]: ID=%d, Text=\"<error_len=%d>\"\n", i, token_id, len);
+                    }
+                }
+            }
+            
+            inputs.push_back(std::move(tmp));
+            
+        } else {
+            // non-multimodal version
+            printf("EMBEDDINGS: Using non-multimodal tokenization\n");
+            
+            if (image_log) {
+                fprintf(image_log, "NON-MULTIMODAL TOKENIZATION:\n");
+            }
+            
+            auto tokenized_prompts = tokenize_input_prompts(ctx_server.vocab, prompt, true, true);
+            printf("EMBEDDINGS: Tokenized %zu prompts\n", tokenized_prompts.size());
+            
+            if (image_log) {
+                fprintf(image_log, "  Tokenized %zu prompts\n", tokenized_prompts.size());
+            }
+            
+            for (size_t prompt_idx = 0; prompt_idx < tokenized_prompts.size(); prompt_idx++) {
+                auto & p = tokenized_prompts[prompt_idx];
+                printf("EMBEDDINGS: Prompt %zu tokens: %zu\n", prompt_idx, p.size());
+                
+                if (image_log) {
+                    fprintf(image_log, "  Prompt %zu tokens: %zu\n", prompt_idx, p.size());
+                }
+                
+                // Debug: Print tokens and IDs for non-multimodal
+                printf("EMBEDDINGS: Token debug for prompt %zu:\n", prompt_idx);
+                if (image_log) {
+                    fprintf(image_log, "    Token details for prompt %zu:\n", prompt_idx);
+                }
+                
+                for (size_t i = 0; i < p.size(); i++) {
+                    llama_token token_id = p[i];
+                    char token_buf[256];
+                    int32_t len = llama_token_to_piece(ctx_server.vocab, token_id, token_buf, sizeof(token_buf), 0, true);
+                    if (len > 0 && len < (int32_t)sizeof(token_buf)) {
+                        token_buf[len] = '\0';
+                        printf("  Token[%zu]: ID=%d, Text=\"%s\"\n", i, token_id, token_buf);
+                        if (image_log) {
+                            fprintf(image_log, "      Token[%zu]: ID=%d, Text=\"%s\"\n", i, token_id, token_buf);
+                        }
+                    } else {
+                        printf("  Token[%zu]: ID=%d, Text=\"<error>\"\n", i, token_id);
+                        if (image_log) {
+                            fprintf(image_log, "      Token[%zu]: ID=%d, Text=\"<error>\"\n", i, token_id);
+                        }
+                    }
+                }
+                
+                auto tmp = server_tokens(p, ctx_server.mctx != nullptr);
+                inputs.push_back(std::move(tmp));
+            }
+        }
+        
+        // Close the log file
+        if (image_log) {
+            fprintf(image_log, "\n=== END OF IMAGE PROCESSING LOG ===\n");
+            fclose(image_log);
+            printf("EMBEDDINGS: Image processing log saved to /home/andrei/workspace/llama_cpp_image_processing.txt\n");
+        }
+        
+        printf("EMBEDDINGS: Total inputs created: %zu\n", inputs.size());
+        
+        // Create embedding tasks
+        std::vector<server_task> tasks;
+        std::unordered_set<int> task_ids;
+        
+        tasks.reserve(inputs.size());
+        for (size_t i = 0; i < inputs.size(); i++) {
+            server_task task = server_task(SERVER_TASK_TYPE_EMBEDDING);
+            
+            task.id    = ctx_server.queue_tasks.get_new_id();
+            task.index = i;
+            
+            task.prompt_tokens    = std::move(inputs[i]);
+            task.params           = server_task::params_from_json_cmpl(
+                    ctx_server.ctx,
+                    ctx_server.params_base,
+                    data);
+            task.id_selected_slot = json_value(data, "id_slot", -1);
+            
+            // OAI-compat
+            task.params.oaicompat = oaicompat;
+            
+            tasks.push_back(std::move(task));
+        }
+        
+        task_ids = server_task::get_list_id(tasks);
+        ctx_server.queue_results.add_waiting_tasks(tasks);
+        ctx_server.queue_tasks.post(std::move(tasks));
+        
+        printf("EMBEDDINGS: Posted %zu tasks to queue\n", tasks.size());
+        
+        // Wait for results
+        ctx_server.receive_multi_results(task_ids, [&](std::vector<server_task_result_ptr> & results) {
+            if (results.size() == 1) {
+                // single result
+                printf("EMBEDDINGS: Returning single result\n");
+                res_ok(res, results[0]->to_json());
+            } else {
+                // multiple results (multitask)
+                printf("EMBEDDINGS: Returning %zu results\n", results.size());
+                json arr = json::array();
+                for (auto & res : results) {
+                    arr.push_back(res->to_json());
+                }
+                res_ok(res, arr);
+            }
+        }, [&](const json & error_data) {
+            printf("EMBEDDINGS: Error occurred during processing\n");
+            res_error(res, error_data);
+        }, [&req]() {
+            return !req.has_header("Connection") || req.get_header_value("Connection") != "keep-alive";
+        });
+
+        ctx_server.queue_results.remove_waiting_task_ids(task_ids);
+        printf("EMBEDDINGS: Processing completed\n");
+    };
 
     const auto handle_embeddings = [&handle_embeddings_impl](const httplib::Request & req, httplib::Response & res) {
         std::vector<raw_buffer> files;

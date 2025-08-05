@@ -485,6 +485,8 @@ extern "C" {
         GGML_OP_SOFT_MAX_BACK,
         GGML_OP_ROPE,
         GGML_OP_ROPE_BACK,
+        // @andrei added custom 3D RoPE, no backward pass yet
+        GGML_OP_ROPE_3D,
         GGML_OP_CLAMP,
         GGML_OP_CONV_TRANSPOSE_1D,
         GGML_OP_IM2COL,
@@ -1653,6 +1655,15 @@ extern "C" {
             float                 attn_factor,
             float                 beta_fast,
             float                 beta_slow);
+
+
+    // @andrei added this for 3D RoPE
+    GGML_API struct ggml_tensor * ggml_rope_3d(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,           // Input tensor [d_head, n_heads, n_patches]
+            struct ggml_tensor  * cos_data,    // Precomputed cos values [d_head, n_patches]
+            struct ggml_tensor  * sin_data);     // Precomputed sin values [d_head, n_patches]
+        
 
     GGML_DEPRECATED(GGML_API struct ggml_tensor * ggml_rope_custom(
             struct ggml_context * ctx,

@@ -190,6 +190,12 @@ int32_t mtmd_helper_decode_image_chunk(
     int32_t n_img_batches = GGML_PAD(n_tokens, n_batch) / n_batch;
     decode_embd_batch batch_embd(encoded_embd, n_tokens, n_pos_per_embd, n_mmproj_embd);
 
+    printf("=== IMAGE DECODE DEBUG ===\n");
+    printf("Using M-RoPE: %s\n", mtmd_decode_use_mrope(ctx) ? "YES" : "NO");
+    printf("Using non-causal: %s\n", mtmd_decode_use_non_causal(ctx) ? "YES" : "NO");
+    printf("n_tokens: %d, n_pos_per_embd: %d\n", n_tokens, n_pos_per_embd);
+    printf("Image positions: %d to %d\n", n_past, n_past + mtmd_input_chunk_get_n_pos(chunk) - 1);
+
     if (mtmd_decode_use_mrope(ctx)) {
         if (chunk_type == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
             const auto image_tokens = mtmd_input_chunk_get_tokens_image(chunk);
@@ -220,6 +226,7 @@ int32_t mtmd_helper_decode_image_chunk(
         llama_batch batch_embd_view = batch_embd.get_view(pos_offset, n_tokens_batch);
 
         LOG_INF("decoding %s batch %d/%d, n_tokens_batch = %d\n", name, i_batch+1, n_img_batches, n_tokens_batch);
+        printf("About to decode batch %d/%d with %d tokens\n", i_batch+1, n_img_batches, n_tokens_batch);
 
         int64_t t1 = ggml_time_ms();
         int32_t ret = llama_decode(lctx, batch_embd_view);

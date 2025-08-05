@@ -964,6 +964,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "SOFT_MAX_BACK",
     "ROPE",
     "ROPE_BACK",
+    "ROPE_3D", // @andrei added this for 3D RoPE, not in the original ggml
     "CLAMP",
     "CONV_TRANSPOSE_1D",
     "IM2COL",
@@ -1010,7 +1011,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 86, "GGML_OP_COUNT != 86");
+static_assert(GGML_OP_COUNT == 87, "GGML_OP_COUNT != 87");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1110,7 +1111,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 86, "GGML_OP_COUNT != 86");
+static_assert(GGML_OP_COUNT == 87, "GGML_OP_COUNT != 87");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -3819,7 +3820,6 @@ struct ggml_tensor * ggml_soft_max_ext_back_inplace(
 }
 
 // ggml_rope
-
 static struct ggml_tensor * ggml_rope_impl(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
@@ -3923,6 +3923,37 @@ struct ggml_tensor * ggml_rope_multi(
     result->src[1] = b;
     result->src[2] = c;
 
+    return result;
+}
+
+// @andrei added this function to support 3D RoPE
+struct ggml_tensor * ggml_rope_3d(
+    struct ggml_context * ctx,
+    struct ggml_tensor  * a,
+    struct ggml_tensor  * cos_data,
+    struct ggml_tensor  * sin_data) {
+    
+    GGML_ASSERT(a != NULL);
+    GGML_ASSERT(cos_data != NULL);
+    GGML_ASSERT(sin_data != NULL);
+    
+    const int d_head = a->ne[0];
+    const int n_heads = a->ne[1]; 
+    const int n_patches = a->ne[2];
+    
+    GGML_ASSERT(d_head % 2 == 0);
+    GGML_ASSERT(cos_data->ne[0] == d_head);
+    GGML_ASSERT(cos_data->ne[1] == n_patches);
+    GGML_ASSERT(sin_data->ne[0] == d_head);
+    GGML_ASSERT(sin_data->ne[1] == n_patches);
+    
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+    
+    result->op = GGML_OP_ROPE_3D;
+    result->src[0] = a;
+    result->src[1] = cos_data;
+    result->src[2] = sin_data;
+    
     return result;
 }
 
