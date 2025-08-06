@@ -866,277 +866,15 @@ struct clip_graph {
         return gf;
     }
 
-    // Qwen2VL and Qwen2.5VL use M-RoPE
-    // ggml_cgraph * build_qwen2vl() {
-    //     GGML_ASSERT(model.patch_bias == nullptr);
-    //     GGML_ASSERT(model.class_embedding == nullptr);
-
-    //     // Print hparams
-    //     printf("=== HPARAMS DEBUG ===\n");
-    //     printf("image_size: %d\n", hparams.image_size);
-    //     printf("patch_size: %d\n", hparams.patch_size);
-    //     printf("n_embd: %d\n", hparams.n_embd);
-    //     printf("projection_dim: %d\n", hparams.projection_dim);
-    //     printf("n_head: %d\n", hparams.n_head);
-    //     printf("mm_patch_merge_type: %d\n", (int)hparams.mm_patch_merge_type);
-    //     printf("eps: %.9f\n", hparams.eps);
-    //     printf("rope_theta: %.6f\n", hparams.rope_theta);
-    //     printf("image_crop_resolution: %d\n", hparams.image_crop_resolution);
-    //     printf("attn_window_size: %d\n", hparams.attn_window_size);
-    //     printf("n_wa_pattern: %d\n", hparams.n_wa_pattern);
-    //     printf("=== END HPARAMS ===\n");
-
-    //     const int batch_size       = 1;
-    //     const bool use_window_attn = hparams.n_wa_pattern > 0;
-    //     const int n_wa_pattern     = hparams.n_wa_pattern;
-    //     const int n_pos            = n_patches;
-    //     const int num_position_ids = n_pos * 4; // m-rope requires 4 dim per position
-
-    //     printf("=== PATCH CALCULATIONS ===\n");
-    //     printf("img.nx: %d, img.ny: %d\n", img.nx, img.ny);
-    //     printf("patch_size: %d\n", patch_size);
-    //     printf("n_patches_x: %d, n_patches_y: %d\n", n_patches_x, n_patches_y);
-    //     printf("n_patches: %d\n", n_patches);
-    //     printf("n_pos: %d\n", n_pos);
-    //     printf("=== END PATCH CALCULATIONS ===\n");
-
-    //     norm_type norm_t = ctx->proj_type() == PROJECTOR_TYPE_QWEN25VL
-    //         ? NORM_TYPE_RMS 
-    //         : NORM_TYPE_NORMAL;
-
-    //     int mrope_sections[4] = {d_head/4, d_head/4, d_head/4, d_head/4};
-
-    //     // the shape here is funny
-    //     // ggml_tensor * inp_raw = build_inp_raw();
-    //     // cb(inp_raw, "inp_raw", -1);
-
-    //     // ggml_tensor * inp_0 = ggml_conv_2d(ctx0, model.patch_embeddings_0, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
-    //     // GGML_ASSERT(img.nx % (patch_size * 2) == 0);
-    //     // GGML_ASSERT(img.ny % (patch_size * 2) == 0);
-
-    //     // ggml_tensor * inp = inp_0;  
-
-    //     // // second conv dimension
-    //     // {
-    //     //     auto inp_1 = ggml_conv_2d(ctx0, model.patch_embeddings_1, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
-    //     //     inp = ggml_add(ctx0, inp, inp_1);
-    //     //     inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 1, 2, 0, 3));  // [w, h, c, b] -> [c, w, h, b]
-            
-    //     //     inp = ggml_reshape_4d(
-    //     //         ctx0, inp,
-    //     //         n_embd * 2, n_patches_x / 2, n_patches_y, batch_size);
-
-    //     //     inp = ggml_reshape_4d(
-    //     //         ctx0, inp,
-    //     //         n_embd * 2, n_patches_x / 2, 2, batch_size * (n_patches_y / 2));
-
-    //     //     inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 0, 2, 1, 3));
-            
-    //     //     inp = ggml_reshape_3d(
-    //     //         ctx0, inp,
-    //     //         n_embd, n_patches_x * n_patches_y, batch_size);
-    //     // }
-
-    //     // cb(inp, "patch_embeddings_final", -1);
-
-    //     printf("=== ABOUT TO CREATE TENSOR ===\n");
-    //     ggml_tensor * inp_raw = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1280, 280, 1);
-    //     printf("=== TENSOR CREATED ===\n");
-    //     ggml_set_name(inp_raw, "inp_raw");
-    //     ggml_set_input(inp_raw);
-    //     printf("=== NOW HAVE INPUT ===\n");
-
-    //     ggml_tensor * inp = inp_raw;
-    //     // cb(inp, "patch_embeddings_final", -1);
-
-    //     ggml_tensor * inpL           = inp;
-    //     ggml_tensor * window_mask    = nullptr;
-    //     ggml_tensor * window_idx     = nullptr;
-    //     ggml_tensor * inv_window_idx = nullptr;
-
-    //     ggml_tensor * positions = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, num_position_ids);
-    //     ggml_set_name(positions, "positions");
-    //     ggml_set_input(positions);
-
-    //     // pre-layernorm
-    //     if (model.pre_ln_w) {
-    //         inpL = build_norm(inpL, model.pre_ln_w, model.pre_ln_b, norm_t, eps, -1);
-    //         cb(inpL, "pre_norm", -1);
-    //     }
-
-    //     printf("=== FINISHED PRE-LAYER NORM ===\n");
-
-    //     if (use_window_attn) {
-    //         printf("=== WINDOW ATTENTION DEBUG ===\n");
-    //         printf("inpL shape before reshape: [%ld, %ld, %ld, %ld]\n", 
-    //             inpL->ne[0], inpL->ne[1], inpL->ne[2], inpL->ne[3]);
-    //         printf("inpL elements: %ld\n", ggml_nelements(inpL));
-            
-    //         printf("Trying to reshape to: [%d, %d]\n", 
-    //             n_embd * 4, n_patches_x * n_patches_y * batch_size / 4);
-    //         printf("Target elements: %d\n", 
-    //             (n_embd * 4) * (n_patches_x * n_patches_y * batch_size / 4));
-    //     }
-
-    //     if (use_window_attn) {
-    //         // handle window attention inputs
-    //         inv_window_idx = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos / 4);
-    //         ggml_set_name(inv_window_idx, "inv_window_idx");
-    //         ggml_set_input(inv_window_idx);
-
-    //         // mask for window attention
-    //         window_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_pos, n_pos);
-    //         ggml_set_name(window_mask, "window_mask");
-    //         ggml_set_input(window_mask);
-
-    //         // inpL shape: [n_embd, n_patches_x * n_patches_y, batch_size]
-    //         GGML_ASSERT(batch_size == 1);
-    //         inpL = ggml_reshape_2d(ctx0, inpL, n_embd * 4, n_patches_x * n_patches_y * batch_size / 4);
-    //         inpL = ggml_get_rows(ctx0, inpL, inv_window_idx);
-    //         inpL = ggml_reshape_3d(ctx0, inpL, n_embd, n_patches_x * n_patches_y, batch_size);
-    //     }
-
-    //     printf("=== FINISHED WINDOW ATTN STUFF ===\n");
-
-    //     // loop over layers
-    //     for (int il = 0; il < n_layer; il++) {
-    //         auto & layer = model.layers[il];
-
-    //         const bool full_attn = use_window_attn ? (il + 1) % n_wa_pattern == 0 : true;
-
-    //         ggml_tensor * cur = inpL; // inpL = residual, cur = hidden_states
-
-    //         // layernorm
-    //         cur = build_norm(cur, layer.ln_1_w, layer.ln_1_b, norm_t, eps, il);
-    //         cb(cur, "norm1", il);
-
-    //         // self-attention
-    //         {
-    //             ggml_tensor * Qcur = ggml_add(ctx0,
-    //                 ggml_mul_mat(ctx0, layer.q_w, cur), layer.q_b);
-    //             ggml_tensor * Kcur = ggml_add(ctx0,
-    //                 ggml_mul_mat(ctx0, layer.k_w, cur), layer.k_b);
-    //             ggml_tensor * Vcur = ggml_add(ctx0,
-    //                 ggml_mul_mat(ctx0, layer.v_w, cur), layer.v_b);
-
-    //             Qcur = ggml_reshape_3d(ctx0, Qcur, d_head, n_head, n_patches);
-    //             Kcur = ggml_reshape_3d(ctx0, Kcur, d_head, n_head, n_patches);
-    //             Vcur = ggml_reshape_3d(ctx0, Vcur, d_head, n_head, n_patches);
-
-    //             // apply M-RoPE
-    //             Qcur = ggml_rope_multi(
-    //                 ctx0, Qcur, positions, nullptr,
-    //                 d_head/2, mrope_sections, GGML_ROPE_TYPE_VISION, 32768, 10000, 1, 0, 1, 32, 1);
-
-    //             Kcur = ggml_rope_multi(
-    //                 ctx0, Kcur, positions, nullptr,
-    //                 d_head/2, mrope_sections, GGML_ROPE_TYPE_VISION, 32768, 10000, 1, 0, 1, 32, 1);
-
-    //             ggml_tensor * attn_mask = full_attn ? nullptr : window_mask;
-
-    //             cur = build_attn(layer.o_w, layer.o_b,
-    //                 Qcur, Kcur, Vcur, attn_mask, kq_scale, il);
-    //         }
-            
-    //         cb(cur, "attn_out", il);
-
-    //         // re-add the layer input, e.g., residual
-    //         cur = ggml_add(ctx0, cur, inpL);
-    //         inpL = cur; // inpL = residual, cur = hidden_states
-    //         cb(cur, "residual_1", il);
-
-    //         // layernorm2
-    //         cur = build_norm(cur, layer.ln_2_w, layer.ln_2_b, norm_t, eps, il);
-    //         cb(cur, "norm2", il);
-
-    //         // ffn
-    //         cur = build_ffn(cur,
-    //             layer.ff_up_w, layer.ff_up_b,
-    //             layer.ff_gate_w, layer.ff_gate_b,
-    //             layer.ff_down_w, layer.ff_down_b,
-    //             hparams.ffn_op, il);
-
-    //         cb(cur, "ffn_out", il);
-
-    //         // residual 2
-    //         cur = ggml_add(ctx0, inpL, cur);
-    //         cb(cur, "residual_2", il);
-    //         cb(cur, "layer_out", il);
-    //         inpL = cur;
-
-    //         printf("=== FINISHED LAYER %d ===\n", il);
-    //     }
-
-    //     // post-layernorm
-    //     if (model.post_ln_w) {
-    //         inpL = build_norm(inpL, model.post_ln_w, model.post_ln_b, norm_t, eps, n_layer);
-    //     }
-
-    //     // multimodal projection
-    //     ggml_tensor * embeddings = inpL;
-    //     embeddings = ggml_reshape_3d(ctx0, embeddings, n_embd * 4, n_pos / 4, batch_size);
-
-    //     embeddings = ggml_mul_mat(ctx0, model.mm_0_w, embeddings);
-    //     embeddings = ggml_add(ctx0, embeddings, model.mm_0_b);
-
-    //     // GELU activation
-    //     embeddings = ggml_gelu(ctx0, embeddings);
-
-    //     // Second linear layer
-    //     embeddings = ggml_mul_mat(ctx0, model.mm_1_w, embeddings);
-    //     embeddings = ggml_add(ctx0, embeddings, model.mm_1_b);
-
-    //     if (use_window_attn) {
-    //         window_idx = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos / 4);
-    //         ggml_set_name(window_idx, "window_idx");
-    //         ggml_set_input(window_idx);
-
-    //         // embeddings shape: [n_embd, n_patches_x * n_patches_y, batch_size]
-    //         GGML_ASSERT(batch_size == 1);
-    //         embeddings = ggml_reshape_2d(ctx0, embeddings, hparams.projection_dim, n_patches_x * n_patches_y / 4);
-    //         embeddings = ggml_get_rows(ctx0, embeddings, window_idx);
-    //         embeddings = ggml_reshape_3d(ctx0, embeddings, hparams.projection_dim, n_patches_x * n_patches_y / 4, batch_size);
-    //     }
-
-    //     // build the graph
-    //     ggml_build_forward_expand(gf, embeddings);
-
-    //     return gf;
-    // }
-
-
     ggml_cgraph * build_qwen2vl() {
         GGML_ASSERT(model.patch_bias == nullptr);
         GGML_ASSERT(model.class_embedding == nullptr);
-
-        // Print hparams
-        printf("=== HPARAMS DEBUG ===\n");
-        printf("image_size: %d\n", hparams.image_size);
-        printf("patch_size: %d\n", hparams.patch_size);
-        printf("n_embd: %d\n", hparams.n_embd);
-        printf("projection_dim: %d\n", hparams.projection_dim);
-        printf("n_head: %d\n", hparams.n_head);
-        printf("mm_patch_merge_type: %d\n", (int)hparams.mm_patch_merge_type);
-        printf("eps: %.9f\n", hparams.eps);
-        printf("rope_theta: %.6f\n", hparams.rope_theta);
-        printf("image_crop_resolution: %d\n", hparams.image_crop_resolution);
-        printf("attn_window_size: %d\n", hparams.attn_window_size);
-        printf("n_wa_pattern: %d\n", hparams.n_wa_pattern);
-        printf("=== END HPARAMS ===\n");
 
         const int batch_size       = 1;
         const bool use_window_attn = hparams.n_wa_pattern > 0;
         const int n_wa_pattern     = hparams.n_wa_pattern;
         const int n_pos            = n_patches;
         const int num_position_ids = n_pos * 4; // m-rope requires 4 dim per position
-
-        printf("=== PATCH CALCULATIONS ===\n");
-        printf("img.nx: %d, img.ny: %d\n", img.nx, img.ny);
-        printf("patch_size: %d\n", patch_size);
-        printf("n_patches_x: %d, n_patches_y: %d\n", n_patches_x, n_patches_y);
-        printf("n_patches: %d\n", n_patches);
-        printf("n_pos: %d\n", n_pos);
-        printf("=== END PATCH CALCULATIONS ===\n");
 
         norm_type norm_t = ctx->proj_type() == PROJECTOR_TYPE_QWEN25VL
             ? NORM_TYPE_RMS 
@@ -1148,260 +886,171 @@ struct clip_graph {
         ggml_tensor * inp = nullptr;
         ggml_tensor * embeddings = nullptr;
 
+        // Normal conv2d pipeline
+        ggml_tensor * inp_raw = build_inp_raw();
+        cb(inp_raw, "inp_raw", -1);
+
+        ggml_tensor * inp_0 = ggml_conv_2d(ctx0, model.patch_embeddings_0, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
+        GGML_ASSERT(img.nx % (patch_size * 2) == 0);
+        GGML_ASSERT(img.ny % (patch_size * 2) == 0);
+
+        inp = inp_0;  
+
+        // second conv dimension
+        {
+            auto inp_1 = ggml_conv_2d(ctx0, model.patch_embeddings_1, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
+            inp = ggml_add(ctx0, inp, inp_1);
+            inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 1, 2, 0, 3));  // [w, h, c, b] -> [c, w, h, b]
+            
+            inp = ggml_reshape_4d(
+                ctx0, inp,
+                n_embd * 2, n_patches_x / 2, n_patches_y, batch_size);
+
+            inp = ggml_reshape_4d(
+                ctx0, inp,
+                n_embd * 2, n_patches_x / 2, 2, batch_size * (n_patches_y / 2));
+
+            inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 0, 2, 1, 3));
+            
+            inp = ggml_reshape_3d(
+                ctx0, inp,
+                n_embd, n_patches_x * n_patches_y, batch_size);
+        }
+
+        cb(inp, "patch_embeddings_final", -1);
+
+        ggml_tensor * inpL           = inp;
+        ggml_tensor * window_mask    = nullptr;
+        ggml_tensor * window_idx     = nullptr;
+        ggml_tensor * inv_window_idx = nullptr;
+
         ggml_tensor * positions = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, num_position_ids);
         ggml_set_name(positions, "positions");
         ggml_set_input(positions);
 
+        // pre-layernorm
+        if (model.pre_ln_w) {
+            inpL = build_norm(inpL, model.pre_ln_w, model.pre_ln_b, norm_t, eps, -1);
+        }
 
-        if (n_patches != 280) {
+        if (use_window_attn) {
+            // handle window attention inputs
+            inv_window_idx = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos / 4);
+            ggml_set_name(inv_window_idx, "inv_window_idx");
+            ggml_set_input(inv_window_idx);
 
-            if (n_patches == 280) {
-                printf("🎯 Detected 280 patches! Using precomputed patch embeddings.\n");
-                
-                // Create input tensor for precomputed embeddings
-                inp = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_embd, n_patches, batch_size);
-                ggml_set_name(inp, "patch_embeddings_final");
-                ggml_set_input(inp);  // Mark as input
-                
-                printf("✅ Created input tensor [%d, %d, %d] for precomputed embeddings\n", 
-                    n_embd, n_patches, batch_size);
-                
-            } else {
-                printf("❌ Found %d patches (not 280), using normal conv2d pipeline\n", n_patches);
-                
-                // Normal conv2d pipeline
-                ggml_tensor * inp_raw = build_inp_raw();
-                cb(inp_raw, "inp_raw", -1);
+            // mask for window attention
+            window_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_pos, n_pos);
+            ggml_set_name(window_mask, "window_mask");
+            ggml_set_input(window_mask);
 
-                ggml_tensor * inp_0 = ggml_conv_2d(ctx0, model.patch_embeddings_0, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
-                GGML_ASSERT(img.nx % (patch_size * 2) == 0);
-                GGML_ASSERT(img.ny % (patch_size * 2) == 0);
+            // inpL shape: [n_embd, n_patches_x * n_patches_y, batch_size]
+            GGML_ASSERT(batch_size == 1);
+            inpL = ggml_reshape_2d(ctx0, inpL, n_embd * 4, n_patches_x * n_patches_y * batch_size / 4);
+            inpL = ggml_get_rows(ctx0, inpL, inv_window_idx);
+            inpL = ggml_reshape_3d(ctx0, inpL, n_embd, n_patches_x * n_patches_y, batch_size);
+        }
 
-                inp = inp_0;  
+        // loop over layers
+        for (int il = 0; il < n_layer; il++) {
+            auto & layer = model.layers[il];
 
-                // second conv dimension
-                {
-                    auto inp_1 = ggml_conv_2d(ctx0, model.patch_embeddings_1, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
-                    inp = ggml_add(ctx0, inp, inp_1);
-                    inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 1, 2, 0, 3));  // [w, h, c, b] -> [c, w, h, b]
-                    
-                    inp = ggml_reshape_4d(
-                        ctx0, inp,
-                        n_embd * 2, n_patches_x / 2, n_patches_y, batch_size);
+            const bool full_attn = use_window_attn ? (il + 1) % n_wa_pattern == 0 : true;
 
-                    inp = ggml_reshape_4d(
-                        ctx0, inp,
-                        n_embd * 2, n_patches_x / 2, 2, batch_size * (n_patches_y / 2));
+            ggml_tensor * cur = inpL; // inpL = residual, cur = hidden_states
 
-                    inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 0, 2, 1, 3));
-                    
-                    inp = ggml_reshape_3d(
-                        ctx0, inp,
-                        n_embd, n_patches_x * n_patches_y, batch_size);
-                }
+            // layernorm
+            cur = build_norm(cur, layer.ln_1_w, layer.ln_1_b, norm_t, eps, il);
+            cb(cur, "norm1", il);
+
+            // self-attention
+            {
+                ggml_tensor * Qcur = ggml_add(ctx0,
+                    ggml_mul_mat(ctx0, layer.q_w, cur), layer.q_b);
+                ggml_tensor * Kcur = ggml_add(ctx0,
+                    ggml_mul_mat(ctx0, layer.k_w, cur), layer.k_b);
+                ggml_tensor * Vcur = ggml_add(ctx0,
+                    ggml_mul_mat(ctx0, layer.v_w, cur), layer.v_b);
+
+                Qcur = ggml_reshape_3d(ctx0, Qcur, d_head, n_head, n_patches);
+                Kcur = ggml_reshape_3d(ctx0, Kcur, d_head, n_head, n_patches);
+                Vcur = ggml_reshape_3d(ctx0, Vcur, d_head, n_head, n_patches);
+
+                // apply M-RoPE
+                Qcur = ggml_rope_multi(
+                    ctx0, Qcur, positions, nullptr,
+                    d_head/2, mrope_sections, GGML_ROPE_TYPE_VISION, 32768, 10000, 1, 0, 1, 32, 1);
+
+                Kcur = ggml_rope_multi(
+                    ctx0, Kcur, positions, nullptr,
+                    d_head/2, mrope_sections, GGML_ROPE_TYPE_VISION, 32768, 10000, 1, 0, 1, 32, 1);
+
+                ggml_tensor * attn_mask = full_attn ? nullptr : window_mask;
+
+                cur = build_attn(layer.o_w, layer.o_b,
+                    Qcur, Kcur, Vcur, attn_mask, kq_scale, il);
             }
-
-            cb(inp, "patch_embeddings_final", -1);
-
-            ggml_tensor * inpL           = inp;
-            ggml_tensor * window_mask    = nullptr;
-            ggml_tensor * window_idx     = nullptr;
-            ggml_tensor * inv_window_idx = nullptr;
-
-            ggml_tensor * positions = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, num_position_ids);
-            ggml_set_name(positions, "positions");
-            ggml_set_input(positions);
-
-            // pre-layernorm
-            if (model.pre_ln_w) {
-                inpL = build_norm(inpL, model.pre_ln_w, model.pre_ln_b, norm_t, eps, -1);
-                cb(inpL, "pre_norm", -1);
-            }
-
-            printf("=== FINISHED PRE-LAYER NORM ===\n");
-
-            if (use_window_attn) {
-                printf("=== WINDOW ATTENTION DEBUG ===\n");
-                printf("inpL shape before reshape: [%ld, %ld, %ld, %ld]\n", 
-                    inpL->ne[0], inpL->ne[1], inpL->ne[2], inpL->ne[3]);
-                printf("inpL elements: %ld\n", ggml_nelements(inpL));
-                
-                printf("Trying to reshape to: [%d, %d]\n", 
-                    n_embd * 4, n_patches_x * n_patches_y * batch_size / 4);
-                printf("Target elements: %d\n", 
-                    (n_embd * 4) * (n_patches_x * n_patches_y * batch_size / 4));
-            }
-
-            if (use_window_attn) {
-                // handle window attention inputs
-                inv_window_idx = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos / 4);
-                ggml_set_name(inv_window_idx, "inv_window_idx");
-                ggml_set_input(inv_window_idx);
-
-                // mask for window attention
-                window_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_pos, n_pos);
-                ggml_set_name(window_mask, "window_mask");
-                ggml_set_input(window_mask);
-
-                // inpL shape: [n_embd, n_patches_x * n_patches_y, batch_size]
-                GGML_ASSERT(batch_size == 1);
-                inpL = ggml_reshape_2d(ctx0, inpL, n_embd * 4, n_patches_x * n_patches_y * batch_size / 4);
-                inpL = ggml_get_rows(ctx0, inpL, inv_window_idx);
-                inpL = ggml_reshape_3d(ctx0, inpL, n_embd, n_patches_x * n_patches_y, batch_size);
-            }
-
-            printf("=== FINISHED WINDOW ATTN STUFF ===\n");
-
-            // loop over layers
-            for (int il = 0; il < n_layer; il++) {
-                auto & layer = model.layers[il];
-
-                const bool full_attn = use_window_attn ? (il + 1) % n_wa_pattern == 0 : true;
-
-                ggml_tensor * cur = inpL; // inpL = residual, cur = hidden_states
-
-                // layernorm
-                cur = build_norm(cur, layer.ln_1_w, layer.ln_1_b, norm_t, eps, il);
-                cb(cur, "norm1", il);
-
-                // self-attention
-                {
-                    ggml_tensor * Qcur = ggml_add(ctx0,
-                        ggml_mul_mat(ctx0, layer.q_w, cur), layer.q_b);
-                    ggml_tensor * Kcur = ggml_add(ctx0,
-                        ggml_mul_mat(ctx0, layer.k_w, cur), layer.k_b);
-                    ggml_tensor * Vcur = ggml_add(ctx0,
-                        ggml_mul_mat(ctx0, layer.v_w, cur), layer.v_b);
-
-                    Qcur = ggml_reshape_3d(ctx0, Qcur, d_head, n_head, n_patches);
-                    Kcur = ggml_reshape_3d(ctx0, Kcur, d_head, n_head, n_patches);
-                    Vcur = ggml_reshape_3d(ctx0, Vcur, d_head, n_head, n_patches);
-
-                    // apply M-RoPE
-                    Qcur = ggml_rope_multi(
-                        ctx0, Qcur, positions, nullptr,
-                        d_head/2, mrope_sections, GGML_ROPE_TYPE_VISION, 32768, 10000, 1, 0, 1, 32, 1);
-
-                    Kcur = ggml_rope_multi(
-                        ctx0, Kcur, positions, nullptr,
-                        d_head/2, mrope_sections, GGML_ROPE_TYPE_VISION, 32768, 10000, 1, 0, 1, 32, 1);
-
-                    ggml_tensor * attn_mask = full_attn ? nullptr : window_mask;
-
-                    cur = build_attn(layer.o_w, layer.o_b,
-                        Qcur, Kcur, Vcur, attn_mask, kq_scale, il);
-                }
-                
-                cb(cur, "attn_out", il);
-
-                // re-add the layer input, e.g., residual
-                cur = ggml_add(ctx0, cur, inpL);
-                inpL = cur; // inpL = residual, cur = hidden_states
-                cb(cur, "residual_1", il);
-
-                // layernorm2
-                cur = build_norm(cur, layer.ln_2_w, layer.ln_2_b, norm_t, eps, il);
-                cb(cur, "norm2", il);
-
-                // ffn
-                cur = build_ffn(cur,
-                    layer.ff_up_w, layer.ff_up_b,
-                    layer.ff_gate_w, layer.ff_gate_b,
-                    layer.ff_down_w, layer.ff_down_b,
-                    hparams.ffn_op, il);
-
-                cb(cur, "ffn_out", il);
-
-                // residual 2
-                cur = ggml_add(ctx0, inpL, cur);
-                cb(cur, "residual_2", il);
-                cb(cur, "layer_out", il);
-                inpL = cur;
-
-                printf("=== FINISHED LAYER %d ===\n", il);
-            }
-
-            // post-layernorm
-            if (model.post_ln_w) {
-                inpL = build_norm(inpL, model.post_ln_w, model.post_ln_b, norm_t, eps, n_layer);
-                cb(inpL, "post_norm", -1);
-            }
-
-            // multimodal projection
-            // ggml_tensor * embeddings = inpL;
-            embeddings = inpL;
-            // some kind of transpose to enable mat_mul
-            embeddings = ggml_reshape_3d(ctx0, embeddings, n_embd * 4, n_pos / 4, batch_size);
-            cb(embeddings, "post_norm_reshaped", -1);
-
-
-            ggml_tensor * mm_0_w = nullptr;
-            ggml_tensor * mm_1_w = nullptr;
-
-            // if (n_patches == 280) {
-            //     // For 280 patches, we use precomputed embeddings
-            //     // This is a special case for Qwen2VL
-            //     printf("Using original weights for patch compression\n");
-
-            //     ggml_tensor * mm_0_w = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 5120, 5120);
-            //     ggml_set_name(mm_0_w, "mm_0_w");
-            //     ggml_set_input(mm_0_w);
-
-            //     ggml_tensor * mm_1_w = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 5120, 2048);
-            //     ggml_set_name(mm_1_w, "mm_1_w");
-            //     ggml_set_input(mm_1_w);
-
-            // } else {
-            //     // For other patch counts, we use the model weights
-            //     mm_0_w = model.mm_0_w;
-            //     mm_1_w = model.mm_1_w;
-            // }
-
-            mm_0_w = model.mm_0_w;
-            mm_1_w = model.mm_1_w;
-
-            // using torch weights
-            embeddings = ggml_mul_mat(ctx0, mm_0_w, embeddings);
-            // embeddings = ggml_add(ctx0, embeddings, model.mm_0_b);
-            cb(mm_0_w, "mm_0_w", -1);
-            cb(embeddings, "mm_0_out", -1);
-
-            // GELU activation
-            embeddings = ggml_gelu(ctx0, embeddings);
-            cb(embeddings, "mm_0_gelu", -1);
-
-            embeddings = ggml_mul_mat(ctx0, mm_1_w, embeddings);
-            // embeddings = ggml_add(ctx0, embeddings, model.mm_1_b);
-            cb(mm_1_w, "mm_1_w", -1);
-            cb(embeddings, "mm_1_out", -1);
-
-            if (use_window_attn) {
-                window_idx = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos / 4);
-                ggml_set_name(window_idx, "window_idx");
-                ggml_set_input(window_idx);
-                cb(window_idx, "window_idx", -1);
-
-                // embeddings shape: [n_embd, n_patches_x * n_patches_y, batch_size]
-                GGML_ASSERT(batch_size == 1);
-                embeddings = ggml_reshape_2d(ctx0, embeddings, hparams.projection_dim, n_patches_x * n_patches_y / 4);
-                embeddings = ggml_get_rows(ctx0, embeddings, window_idx);
-                embeddings = ggml_reshape_3d(ctx0, embeddings, hparams.projection_dim, n_patches_x * n_patches_y / 4, batch_size);
-                cb(embeddings, "windowed_embeddings", -1);
-            }
-        } else {
-            printf("🎯 Detected 280 patches! Using precomputed patch embeddings.\n");
             
-            // Create input tensor for precomputed embeddings
-            inp = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.projection_dim, n_patches_x * n_patches_y / 4);
-            ggml_set_name(inp, "embeddings_final");
-            ggml_set_input(inp);  // Mark as input
-            
-            // [2048, 70, 1, 1]
-            printf("✅ Created input tensor [%d, %d, %d] for precomputed embeddings\n", 
-                n_embd, n_patches / 4, batch_size);
+            cb(cur, "attn_out", il);
 
-            embeddings = ggml_reshape_3d(ctx0, inp, hparams.projection_dim, n_patches_x * n_patches_y / 4, batch_size);
-        }   
+            // re-add the layer input, e.g., residual
+            cur = ggml_add(ctx0, cur, inpL);
+            inpL = cur; // inpL = residual, cur = hidden_states
+            cb(cur, "residual_1", il);
+
+            // layernorm2
+            cur = build_norm(cur, layer.ln_2_w, layer.ln_2_b, norm_t, eps, il);
+            cb(cur, "norm2", il);
+
+            // ffn
+            cur = build_ffn(cur,
+                layer.ff_up_w, layer.ff_up_b,
+                layer.ff_gate_w, layer.ff_gate_b,
+                layer.ff_down_w, layer.ff_down_b,
+                hparams.ffn_op, il);
+
+            cb(cur, "ffn_out", il);
+
+            // residual 2
+            cur = ggml_add(ctx0, inpL, cur);
+            cb(cur, "residual_2", il);
+            cb(cur, "layer_out", il);
+            inpL = cur;
+        }
+
+        // post-layernorm
+        if (model.post_ln_w) {
+            inpL = build_norm(inpL, model.post_ln_w, model.post_ln_b, norm_t, eps, n_layer);
+            cb(inpL, "post_norm", -1);
+        }
+
+        // multimodal projection
+        ggml_tensor * embeddings = inpL;
+        embeddings = ggml_reshape_3d(ctx0, embeddings, n_embd * 4, n_pos / 4, batch_size);
+
+        // using torch weights
+        embeddings = ggml_mul_mat(ctx0,  model.mm_0_w, embeddings);
+        embeddings = ggml_add(ctx0, embeddings, model.mm_0_b);
+
+        // GELU activation
+        embeddings = ggml_gelu(ctx0, embeddings);
+
+        embeddings = ggml_mul_mat(ctx0, model.mm_1_w, embeddings);
+        embeddings = ggml_add(ctx0, embeddings, model.mm_1_b);
+
+        if (use_window_attn) {
+            window_idx = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos / 4);
+            ggml_set_name(window_idx, "window_idx");
+            ggml_set_input(window_idx);
+
+            // embeddings shape: [n_embd, n_patches_x * n_patches_y, batch_size]
+            GGML_ASSERT(batch_size == 1);
+            embeddings = ggml_reshape_2d(ctx0, embeddings, hparams.projection_dim, n_patches_x * n_patches_y / 4);
+            embeddings = ggml_get_rows(ctx0, embeddings, window_idx);
+            embeddings = ggml_reshape_3d(ctx0, embeddings, hparams.projection_dim, n_patches_x * n_patches_y / 4, batch_size);
+        }
+
+        cb(embeddings, "image_embeddings", -1);
 
         // build the graph
         ggml_build_forward_expand(gf, embeddings);
@@ -1706,10 +1355,7 @@ struct clip_graph {
         // pre-layernorm
         if (model.pre_ln_w) {
             inpL = build_norm(inpL, model.pre_ln_w, model.pre_ln_b, NORM_TYPE_NORMAL, eps, -1);
-            cb(inpL, "pre_ln", -1);
-        } else {
-            cb(inpL, "patch_embd_out", -1);
-        }
+        } 
 
         std::vector<ggml_tensor *> embedding_stack;
         const auto & vision_feature_layer = hparams.vision_feature_layer;
@@ -1727,7 +1373,6 @@ struct clip_graph {
 
             // layernorm1
             cur = build_norm(cur, layer.ln_1_w, layer.ln_1_b, NORM_TYPE_NORMAL, eps, il);
-            cb(cur, "layer_inp_normed", il);
 
             // self-attention
             {
@@ -1750,13 +1395,8 @@ struct clip_graph {
                 Kcur = ggml_reshape_3d(ctx0, Kcur, d_head, n_head, n_pos);
                 Vcur = ggml_reshape_3d(ctx0, Vcur, d_head, n_head, n_pos);
 
-                cb(Qcur, "Qcur", il);
-                cb(Kcur, "Kcur", il);
-                cb(Vcur, "Vcur", il);
-
                 cur = build_attn(layer.o_w, layer.o_b,
                     Qcur, Kcur, Vcur, nullptr, kq_scale, il);
-                cb(cur, "attn_out", il);
             }
 
             // re-add the layer input, e.g., residual
@@ -1764,11 +1404,8 @@ struct clip_graph {
 
             inpL = cur; // inpL = residual, cur = hidden_states
 
-            cb(cur, "ffn_inp", il);
-
             // layernorm2
             cur = build_norm(cur, layer.ln_2_w, layer.ln_2_b, NORM_TYPE_NORMAL, eps, il);
-            cb(cur, "ffn_inp_normed", il);
 
             // ffn
             cur = build_ffn(cur,
@@ -1777,11 +1414,8 @@ struct clip_graph {
                 layer.ff_down_w, layer.ff_down_b,
                 hparams.ffn_op, il);
 
-            cb(cur, "ffn_out", il);
-
             // residual 2
             cur = ggml_add(ctx0, inpL, cur);
-            cb(cur, "layer_out", il);
 
             inpL = cur;
         }
@@ -4365,82 +3999,55 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     };
 
     // // set input pixel values
-    // if (!imgs.is_audio) {
-    //     size_t nelem = 0;
-    //     for (const auto & img : imgs.entries) {
-    //         nelem += img->nx * img->ny * 3;
-    //     }
-    //     std::vector<float> inp_raw(nelem);
+    if (!imgs.is_audio) {
+        size_t nelem = 0;
+        for (const auto & img : imgs.entries) {
+            nelem += img->nx * img->ny * 3;
+        }
+        std::vector<float> inp_raw(nelem);
 
-    //     // layout of data (note: the channel dim is unrolled to better visualize the layout):
-    //     //
-    //     // ┌──W──┐
-    //     // │     H │  channel = R
-    //     // ├─────┤ │
-    //     // │     H │  channel = G
-    //     // ├─────┤ │
-    //     // │     H │  channel = B
-    //     // └─────┘ │
-    //     //   ──────┘ x B
+        // layout of data (note: the channel dim is unrolled to better visualize the layout):
+        //
+        // ┌──W──┐
+        // │     H │  channel = R
+        // ├─────┤ │
+        // │     H │  channel = G
+        // ├─────┤ │
+        // │     H │  channel = B
+        // └─────┘ │
+        //   ──────┘ x B
 
-    //     for (size_t i = 0; i < imgs.entries.size(); i++) {
-    //         const int nx = imgs.entries[i]->nx;
-    //         const int ny = imgs.entries[i]->ny;
-    //         const int n = nx * ny;
+        for (size_t i = 0; i < imgs.entries.size(); i++) {
+            const int nx = imgs.entries[i]->nx;
+            const int ny = imgs.entries[i]->ny;
+            const int n = nx * ny;
 
-    //         for (int b = 0; b < batch_size; b++) {
-    //             float * batch_entry = inp_raw.data() + b * (3*n);
-    //             for (int y = 0; y < ny; y++) {
-    //                 for (int x = 0; x < nx; x++) {
-    //                     size_t base_src = 3*(y * nx + x); // idx of the first channel
-    //                     size_t base_dst =    y * nx + x;  // idx of the first channel
-    //                     batch_entry[      base_dst] = imgs.entries[b]->buf[base_src    ];
-    //                     batch_entry[1*n + base_dst] = imgs.entries[b]->buf[base_src + 1];
-    //                     batch_entry[2*n + base_dst] = imgs.entries[b]->buf[base_src + 2];
-    //                 }
-    //             }
-    //         }
-    //     }
-    //     set_input_f32("inp_raw", inp_raw);
+            for (int b = 0; b < batch_size; b++) {
+                float * batch_entry = inp_raw.data() + b * (3*n);
+                for (int y = 0; y < ny; y++) {
+                    for (int x = 0; x < nx; x++) {
+                        size_t base_src = 3*(y * nx + x); // idx of the first channel
+                        size_t base_dst =    y * nx + x;  // idx of the first channel
+                        batch_entry[      base_dst] = imgs.entries[b]->buf[base_src    ];
+                        batch_entry[1*n + base_dst] = imgs.entries[b]->buf[base_src + 1];
+                        batch_entry[2*n + base_dst] = imgs.entries[b]->buf[base_src + 2];
+                    }
+                }
+            }
+        }
+        set_input_f32("inp_raw", inp_raw);
 
-    // } 
-    // else {
-    //     // audio input
-    //     GGML_ASSERT(imgs.entries.size() == 1);
-    //     const auto & mel_inp = imgs.entries[0];
-    //     const int n_step = mel_inp->nx;
-    //     const int n_mel  = mel_inp->ny;
-    //     std::vector<float> inp_raw(n_step * n_mel);
-    //     std::memcpy(inp_raw.data(), mel_inp->buf.data(), n_step * n_mel * sizeof(float));
-    //     set_input_f32("inp_raw", inp_raw);
-    // }
-
-    // Load patch embeddings directly 
-    // std::ifstream patch_embeddings_file("/home/andrei/workspace/qwen25vl_patch_embeddings.bin", std::ios::binary);
-    // std::vector<float> patch_embeddings_data(280 * 1280);
-    // patch_embeddings_file.read(reinterpret_cast<char*>(patch_embeddings_data.data()), patch_embeddings_data.size() * sizeof(float));
-    // set_input_f32("patch_embeddings_final", patch_embeddings_data);
-    // printf("Loaded patch embeddings: %zu elements\n", patch_embeddings_data.size());
-
-    std::ifstream embeddings_file("/home/andrei/workspace/qwen25vl_final_vit_embeddings.bin", std::ios::binary);
-    std::vector<float> embeddings_data(70 * 2048);
-    embeddings_file.read(reinterpret_cast<char*>(embeddings_data.data()), embeddings_data.size() * sizeof(float));
-    set_input_f32("embeddings_final", embeddings_data);
-    printf("Loaded final embeddings: %zu elements\n", embeddings_data.size());
-
-    // Load projection weights directly
-    // std::ifstream mm_0_w_file("/home/andrei/workspace/qwen25vl_mm_0_w.bin");
-    // std::vector<float> mm_0_w_data(5120 * 5120);
-    // mm_0_w_file.read(reinterpret_cast<char*>(mm_0_w_data.data()), mm_0_w_data.size() * sizeof(float));
-    // set_input_f32("mm_0_w", mm_0_w_data);
-    // printf("Loaded mm_0_w weights: %zu elements\n", mm_0_w_data.size());
-
-    // std::ifstream mm_1_w_file("/home/andrei/workspace/qwen25vl_mm_1_w.bin");
-    // std::vector<float> mm_1_w_data(5120 * 2048);
-    // mm_1_w_file.read(reinterpret_cast<char*>(mm_1_w_data.data()), mm_1_w_data.size() * sizeof(float));
-    // set_input_f32("mm_1_w", mm_1_w_data);
-    // printf("Loaded mm_1_w weights: %zu elements\n", mm_1_w_data.size());
-
+    } else {
+        // audio input
+        GGML_ASSERT(imgs.entries.size() == 1);
+        const auto & mel_inp = imgs.entries[0];
+        const int n_step = mel_inp->nx;
+        const int n_mel  = mel_inp->ny;
+        std::vector<float> inp_raw(n_step * n_mel);
+        std::memcpy(inp_raw.data(), mel_inp->buf.data(), n_step * n_mel * sizeof(float));
+        set_input_f32("inp_raw", inp_raw);
+    }
+    
     // set input per projector
     switch (ctx->model.proj_type) {
         case PROJECTOR_TYPE_MINICPMV:
@@ -4554,9 +4161,9 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                         }
                     }
 
-                    // set_input_i32("window_idx",     idx);
-                    // set_input_i32("inv_window_idx", inv_idx);
-                    // set_input_f32("window_mask",    mask);
+                    set_input_i32("window_idx",     idx);
+                    set_input_i32("inv_window_idx", inv_idx);
+                    set_input_f32("window_mask",    mask);
                 } else {
                     for (int i = 0; i < ph * pw; i++) {
                         idx[i] = i;
@@ -4585,31 +4192,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                     }
                 }
 
-                // set_input_i32("positions", positions);
-
-                // ggml_tensor * inp = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1280, 280, 1);
-                // ggml_set_name(inp, "patch_embeddings_final");
-                // ggml_set_input(inp);
-
-                // debug_raw_data_load();
-
-                // printf("CLIP_PREPROCESS --- LOAD COS/SIN DATA\n");
-
-                // std::vector<float> cos_data(80 * 280);
-                // std::vector<float> sin_data(80 * 280);
-
-                // load_tensor_from_file(cos_data, 80, 280, 0, "/home/andrei/workspace/qwen25_cos.txt");
-                // load_tensor_from_file(sin_data, 80, 280, 0, "/home/andrei/workspace/qwen25_sin.txt");
-
-                // Generate directly instead of loading
-                // generate_qwen_position_embeddings(cos_data.data(), sin_data.data(), 
-                //                             14, 20, 2, 80);
-
-                // Set as graph inputs
-                // set_input_f32("cos_data", cos_data);
-                // set_input_f32("sin_data", sin_data);
-
-                // printf("CLIP_PREPROCESS: cos_data size: %zu, sin_data size: %zu\n", cos_data.size(), sin_data.size());
+                set_input_i32("positions", positions);
 
             } break;
         case PROJECTOR_TYPE_PIXTRAL:
@@ -4705,40 +4288,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         return false;
     }
 
-    // After loading the data successfully:
-    // std::ifstream file("/home/andrei/workspace/qwen25vl_patch_embeddings.bin", std::ios::binary);
-    // std::vector<float> patch_data(280 * 1280);
-    // file.read(reinterpret_cast<char*>(patch_data.data()), patch_data.size() * sizeof(float));
-    // printf("Patch data loaded, size: %zu\n", patch_data.size());
-
-    // Create temporary context with actual memory allocation
-    // struct ggml_init_params temp_params = {
-    //     /*.mem_size   =*/ 16 * 1024 * 1024,  // 16MB 
-    //     /*.mem_buffer =*/ nullptr,
-    //     /*.no_alloc   =*/ false,              // Actually allocate memory!
-    // };
-    // ggml_context * temp_ctx = ggml_init(temp_params);
-
-    // if (temp_ctx) {
-    //     printf("✅ Created temporary context for testing\n");
-    //     // Create tensor with PyTorch shape [280, 1280, 1] - exactly as exported
-    //     ggml_tensor * test_inp = ggml_new_tensor_3d(temp_ctx, GGML_TYPE_F32, 1280, 280, 1);
-    //     ggml_set_name(test_inp, "loaded_patch_embeddings");
-        
-    //     // Copy data directly - tofile() saves in C-order which matches this layout
-    //     float * tensor_data = (float*)test_inp->data;
-    //     memcpy(tensor_data, patch_data.data(), patch_data.size() * sizeof(float));
-        
-    //     printf("✅ Data copied with PyTorch shape [280, 1280, 1]\n");
-    //     log_to_file_or_console_parameterized(nullptr, test_inp, nullptr);
-        
-    //     // Clean up
-    //     ggml_free(temp_ctx);
-    // } else {
-    //     printf("❌ Failed to create temporary context\n");
-    // }
-
-    // CLEAN DEBUG SECTION - REPLACE EVERYTHING AFTER ggml_backend_sched_graph_compute()
+    // TODO: @andrei get rid of this debug section
     bool debug_save_layers = true;
     if (debug_save_layers) {
         printf("DEBUG: Starting layer logging...\n");

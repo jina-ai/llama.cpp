@@ -1,8 +1,8 @@
-import torch
+import torch # type: ignore
 from typing import Dict, Optional
-from transformers import Qwen2_5_VLForConditionalGeneration, Qwen2_5_VLProcessor
-from qwen_vl_utils import process_vision_info
-import numpy as np
+from transformers import Qwen2_5_VLForConditionalGeneration, Qwen2_5_VLProcessor # type: ignore
+from qwen_vl_utils import process_vision_info # type: ignore
+import numpy as np # type: ignore
 
 
 class LogParams:
@@ -30,7 +30,6 @@ class VitDebugger:
         self.layer_outputs: Dict[str, torch.Tensor] = {}
         self.hooks = []
         self.log_params = log_params or LogParams()
-        self.attention_scalars: Dict[str, float] = {}
     
     def create_hook(self, layer_name: str):
         """Create a forward hook that captures layer outputs"""
@@ -51,7 +50,6 @@ class VitDebugger:
     def clear_outputs(self):
         """Clear stored outputs"""
         self.layer_outputs.clear()
-        self.attention_scalars.clear()
     
     def cleanup_hooks(self):
         """Remove all registered hooks"""
@@ -141,17 +139,6 @@ class VitDebugger:
         
         with open(self.output_file, "w") as f:
             f.write("########## PYTORCH OUTPUTS ##########\n\n")
-            
-            # Write scalar values first
-            if self.attention_scalars:
-                f.write("=== SCALAR VALUES ===\n")
-                for key, value in self.attention_scalars.items():
-                    if isinstance(value, str):
-                        f.write(f"{key}: {value}\n")
-                    else:
-                        f.write(f"{key}: {value:.6f}\n")
-                f.write("\n")
-            
             for key in key_order:
                 if key in self.layer_outputs:
                     output = self.layer_outputs[key]
@@ -180,16 +167,6 @@ def setup_hooks(model, debugger: VitDebugger, max_layers: int = 32):
         return
     
     print(f"Found {len(vision_model.blocks)} vision blocks")
-
-    # Store config info
-    if hasattr(vision_model, 'fullatt_block_indexes'):
-        debugger.attention_scalars["fullatt_block_indexes"] = str(list(vision_model.fullatt_block_indexes))
-    if hasattr(vision_model, 'window_size'):
-        debugger.attention_scalars["window_size"] = int(vision_model.window_size)
-    if hasattr(vision_model, 'spatial_merge_size'):
-        debugger.attention_scalars["spatial_merge_size"] = int(vision_model.spatial_merge_size)
-    if hasattr(vision_model, 'patch_size'):
-        debugger.attention_scalars["patch_size"] = int(vision_model.patch_size)
 
     # Hook patch embedding - using the same style as the old script
     if hasattr(vision_model, 'patch_embed'):
@@ -228,13 +205,6 @@ def setup_hooks(model, debugger: VitDebugger, max_layers: int = 32):
     for i in range(min(max_layers, len(vision_model.blocks))):
         block = vision_model.blocks[i]
         
-        # Store attention type
-        if hasattr(vision_model, 'fullatt_block_indexes'):
-            if i in vision_model.fullatt_block_indexes:
-                debugger.attention_scalars[f"layer_{i}_attention_type"] = "full"
-            else:
-                debugger.attention_scalars[f"layer_{i}_attention_type"] = "windowed"
-        
         # Hook components
         if hasattr(block, 'norm1'):
             hook = block.norm1.register_forward_hook(debugger.create_hook(f"norm1_{i}"))
@@ -245,8 +215,6 @@ def setup_hooks(model, debugger: VitDebugger, max_layers: int = 32):
             debugger.hooks.append(hook)
         
         if hasattr(block, 'attn'):
-            if hasattr(block.attn, 'scaling'):
-                debugger.attention_scalars[f"kq_scale_{i}"] = float(block.attn.scaling)
             hook = block.attn.register_forward_hook(debugger.create_hook(f"attn_out_{i}"))
             debugger.hooks.append(hook)
         
@@ -269,8 +237,7 @@ def setup_hooks(model, debugger: VitDebugger, max_layers: int = 32):
         debugger.hooks.append(hook)
         print("✅ Added merger hook")
     
-    # CRITICAL: Hook the FINAL ViT output - this captures the TRUE final embeddings 
-    # after ALL processing: blocks + merger + index reordering
+
     def final_vit_hook(module, input, output):
         # This captures the final output of the vision transformer
         # AFTER: patch_embed -> blocks -> merger -> reverse indexing
@@ -287,7 +254,6 @@ def setup_hooks(model, debugger: VitDebugger, max_layers: int = 32):
     hook = vision_model.register_forward_hook(final_vit_hook)
     debugger.hooks.append(hook)
     print("✅ Added TRUE FINAL ViT embeddings hook (after merger + reordering)")
-    
     print(f"✅ {len(debugger.hooks)} hooks registered")
 
 
