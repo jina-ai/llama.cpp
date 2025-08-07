@@ -1775,12 +1775,15 @@ private:
     //
 
     void cb(ggml_tensor * cur0, const char * name, int il) const {
-        ggml_tensor * cur = ggml_cpy(ctx0, cur0, ggml_dup_tensor(ctx0, cur0));
-        std::string cur_name = il >= 0 ? std::string(name) + "_" + std::to_string(il) : name;
-        ggml_set_name(cur, cur_name.c_str());
-        ggml_set_output(cur);
-        ggml_build_forward_expand(gf, cur);
-        ctx->debug_print_tensors.push_back(cur);
+        const char* env_debug = getenv("DEBUG_SAVE_LAYERS");
+        if (env_debug && strcmp(env_debug, "1") == 0) {
+            ggml_tensor * cur = ggml_cpy(ctx0, cur0, ggml_dup_tensor(ctx0, cur0));
+            std::string cur_name = il >= 0 ? std::string(name) + "_" + std::to_string(il) : name;
+            ggml_set_name(cur, cur_name.c_str());
+            ggml_set_output(cur);
+            ggml_build_forward_expand(gf, cur);
+            ctx->debug_print_tensors.push_back(cur);
+        }
     }
 
     // build vision transformer (ViT) cgraph
@@ -4288,11 +4291,10 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         return false;
     }
 
-    // TODO: @andrei get rid of this debug section
-    bool debug_save_layers = true;
-    if (debug_save_layers) {
-        printf("DEBUG: Starting layer logging...\n");
 
+    const char* env_debug = getenv("DEBUG_SAVE_LAYERS");
+
+    if (env_debug && strcmp(env_debug, "1") == 0) {
         log_params_t params = {0};
         params.start_patch = 0;
         params.num_patches = 5;
@@ -4310,7 +4312,6 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
             if (
                 strstr(t->name, "inp_raw") ||
                 strstr(t->name, "patch_embeddings_final") ||
-                strstr(t->name, "pre_norm") ||
                 strstr(t->name, "norm1") ||
                 strstr(t->name, "attn_out") ||
                 strstr(t->name, "residual_1") ||
@@ -4319,20 +4320,9 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 strstr(t->name, "residual_2") ||
                 strstr(t->name, "layer_out") ||
                 strstr(t->name, "post_norm") ||
-                strstr(t->name, "post_norm_reshaped") ||
-                strstr(t->name, "mm_0_w") ||
-                // strstr(t->name, "mm_0_b") ||
-                strstr(t->name, "mm_0_out") ||
-                // strstr(t->name, "mm_0_gelu") ||
-                strstr(t->name, "mm_1_w") ||
-                // strstr(t->name, "mm_1_b") ||
-                strstr(t->name, "mm_1_out") ||
-                strstr(t->name, "window_idx") ||
-                strstr(t->name, "windowed_embeddings")
+                strstr(t->name, "image_embeddings")
             ) log_to_file_or_console_parameterized(nullptr, t, &params);
         }
-        
-        printf("DEBUG: Layer logging completed\n");
     }
 
     // print debug nodes
