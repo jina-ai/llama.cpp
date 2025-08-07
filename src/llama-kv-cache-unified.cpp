@@ -929,22 +929,6 @@ llama_kv_cache_unified::slot_info llama_kv_cache_unified::find_slot(const llama_
 }
 
 void llama_kv_cache_unified::apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch) {
-
-    printf("=== APPLY_UBATCH DEBUG ===\n");
-    printf("Adding %d tokens to KV cache\n", ubatch.n_tokens);
-    printf("Slot streams: %zu, slot size: %zu\n", sinfo.n_stream(), sinfo.size());
-    printf("Expected total: %zu (streams * size)\n", sinfo.n_stream() * sinfo.size());
-    
-    // Print token positions being added
-    printf("Token positions being added:\n");
-    for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
-        printf("  Token %d: pos=%d, seq_ids=[", i, ubatch.pos[i]);
-        for (int32_t s = 0; s < ubatch.n_seq_id[i]; s++) {
-            printf("%d%s", ubatch.seq_id[i][s], (s < ubatch.n_seq_id[i]-1) ? "," : "");
-        }
-        printf("]\n");
-    }
-
     // keep track of the max sequence position that we would overwrite with this ubatch
     // for non-SWA cache, this would be always empty
     llama_seq_id seq_pos_max_rm[LLAMA_MAX_SEQ];
@@ -953,15 +937,6 @@ void llama_kv_cache_unified::apply_ubatch(const slot_info & sinfo, const llama_u
     }
 
     assert(ubatch.n_tokens == sinfo.n_stream()*sinfo.size());
-
-    printf("Cell assignments:\n");
-    for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
-        printf("  Stream %d: cells [", sinfo.strm[s]);
-        for (uint32_t ii = 0; ii < sinfo.size(); ++ii) {
-            printf("%d%s", sinfo.idxs[s][ii], (ii < sinfo.size()-1) ? "," : "");
-        }
-        printf("]\n");
-    }
 
     for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
         for (uint32_t ii = 0; ii < sinfo.size(); ++ii) {
@@ -1010,13 +985,6 @@ void llama_kv_cache_unified::apply_ubatch(const slot_info & sinfo, const llama_u
             seq_rm(s, cells.seq_pos_min(s), seq_pos_max_rm[s] + 1);
         }
     }
-
-    printf("=== APPLY_UBATCH COMPLETE ===\n");
-    printf("New head positions:\n");
-    for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
-        printf("  Stream %d head: %d\n", sinfo.strm[s], sinfo.idxs[s].back() + 1);
-    }
-    printf("\n");
 
     // move the head at the end of the slot
     for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
@@ -1078,14 +1046,6 @@ ggml_tensor * llama_kv_cache_unified::get_k(ggml_context * ctx, int32_t il, uint
 
     const uint32_t ns = sinfo.s1 - sinfo.s0 + 1;
 
-    printf("=== GET_K DEBUG (Layer %d) ===\n", il);
-    printf("n_kv (positions being attended): %u\n", n_kv);
-    printf("kv_size (total cache size): %lu\n", kv_size);
-    printf("n_embd_head_k: %lu, n_head_kv: %lu\n", hparams.n_embd_head_k, hparams.n_head_kv(il));
-    printf("slot_info: s0=%d, s1=%d, ns=%u\n", sinfo.s0, sinfo.s1, ns);
-    printf("K tensor view shape: [%lu, %lu, %u, %u]\n", 
-           hparams.n_embd_head_k, hparams.n_head_kv(il), n_kv, ns);
-
     return ggml_view_4d(ctx, k,
             hparams.n_embd_head_k, hparams.n_head_kv(il), n_kv, ns,
             ggml_row_size(k->type, hparams.n_embd_head_k),
@@ -1106,20 +1066,6 @@ ggml_tensor * llama_kv_cache_unified::get_v(ggml_context * ctx, int32_t il, uint
     assert(n_embd_v_gqa >= hparams.n_embd_v_gqa(il));
 
     const uint32_t ns = sinfo.s1 - sinfo.s0 + 1;
-
-    printf("=== GET_V DEBUG (Layer %d) ===\n", il);
-    printf("n_kv (positions being attended): %u\n", n_kv);
-    printf("kv_size (total cache size): %lu\n", kv_size);
-    printf("v_trans: %s\n", v_trans ? "TRUE" : "FALSE");
-    printf("slot_info: s0=%d, s1=%d, ns=%u\n", sinfo.s0, sinfo.s1, ns);
-    printf("n_embd_head_v: %lu, n_head_kv: %lu\n", hparams.n_embd_head_v, hparams.n_head_kv(il));
-    if (!v_trans) {
-        printf("V tensor view shape (non-trans): [%lu, %lu, %u, %u]\n", 
-               hparams.n_embd_head_v, hparams.n_head_kv(il), n_kv, ns);
-    } else {
-        printf("V tensor view shape (transposed): [%u, %lu, %lu, %u]\n", 
-               n_kv, hparams.n_head_kv(il), hparams.n_embd_head_v, ns);
-    }
 
     if (!v_trans) {
         // note: v->nb[1] <= v->nb[2]
@@ -1321,156 +1267,6 @@ void llama_kv_cache_unified::set_input_k_shift(ggml_tensor * dst) const {
     }
 }
 
-// void llama_kv_cache_unified::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {
-//     const uint32_t n_tokens = ubatch->n_tokens;
-
-//     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
-//     float * data = (float *) dst->data;
-
-//     const int64_t n_kv     = dst->ne[0];
-//     const int64_t n_stream = dst->ne[3]; // num streams in the current ubatch
-
-//     GGML_ASSERT(n_tokens%n_stream == 0);
-
-//     // n_tps == n_tokens_per_stream
-//     const int64_t n_tps     = n_tokens/n_stream;
-//     const int64_t n_tps_pad = GGML_PAD(n_tps, GGML_KQ_MASK_PAD);
-
-//     std::fill(data, data + ggml_nelements(dst), -INFINITY);
-
-//     // Use only the previous KV cells of the correct sequence for each token of the ubatch.
-//     // It's assumed that if a token in the batch has multiple sequences, they are equivalent.
-//     // Example with a cache of 10 tokens, 2 tokens populated in cache and 3 tokens in batch:
-//     //   Causal mask:
-//     //      xxx-------
-//     //      xxxx------
-//     //      xxxxx-----
-//     //   Non-causal mask:
-//     //      xxxxx-----
-//     //      xxxxx-----
-//     //      xxxxx-----
-//     // To visualize the mask, see https://github.com/ggml-org/llama.cpp/pull/12615
-//     // TODO: optimize this section
-//     for (uint32_t h = 0; h < 1; ++h) {
-//         for (uint32_t s = 0; s < n_stream; ++s) {
-//             for (uint32_t ii = 0; ii < n_tps; ++ii) {
-//                 const uint32_t i = s*n_tps + ii;
-
-//                 const llama_seq_id seq_id = ubatch->seq_id[i][0];
-
-//                 const auto & cells = v_cells[seq_to_stream[seq_id]];
-
-//                 const llama_pos p1 = ubatch->pos[i];
-
-//                 const uint64_t idst = n_kv*(h*n_stream*n_tps_pad + s*n_tps_pad + ii);
-
-//                 for (uint32_t j = 0; j < n_kv; ++j) {
-//                     if (cells.is_empty(j)) {
-//                         continue;
-//                     }
-
-//                     // mask the token if not the same sequence
-//                     if (!cells.seq_has(j, seq_id)) {
-//                         continue;
-//                     }
-
-//                     const llama_pos p0 = cells.pos_get(j);
-
-//                     // mask future tokens
-//                     if (causal_attn && p0 > p1) {
-//                         continue;
-//                     }
-
-//                     // apply SWA if any
-//                     if (is_masked_swa(p0, p1)) {
-//                         continue;
-//                     }
-
-//                     data[idst + j] = hparams.use_alibi ? -std::abs(p0 - p1) : 0.0f;
-//                 }
-//             }
-//         }
-//     }
-// }
-
-// void llama_kv_cache_unified::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {
-//     const uint32_t n_tokens = ubatch->n_tokens;
-
-//     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
-//     float * data = (float *) dst->data;
-
-//     const int64_t n_kv     = dst->ne[0];
-//     const int64_t n_stream = dst->ne[3]; // num streams in the current ubatch
-
-//     GGML_ASSERT(n_tokens%n_stream == 0);
-
-//     // n_tps == n_tokens_per_stream
-//     const int64_t n_tps     = n_tokens/n_stream;
-//     const int64_t n_tps_pad = GGML_PAD(n_tps, GGML_KQ_MASK_PAD);
-
-//     // ADD DEBUG HERE:
-//     printf("=== ATTENTION MASK DEBUG ===\n");
-//     printf("n_kv (total KV positions): %ld\n", n_kv);
-//     printf("n_tokens (current batch): %u\n", n_tokens);
-//     printf("n_stream: %ld, n_tps: %ld, n_tps_pad: %ld\n", n_stream, n_tps, n_tps_pad);
-//     printf("causal_attn: %s\n", causal_attn ? "TRUE" : "FALSE");
-//     printf("Mask tensor shape: [%ld, %ld, %ld, %ld]\n", 
-//            dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
-
-//     std::fill(data, data + ggml_nelements(dst), -INFINITY);
-
-//     // ADD DEBUG IN THE MASK BUILDING LOOP:
-//     int enabled_positions = 0;
-//     int total_checks = 0;
-
-//     // Use only the previous KV cells of the correct sequence for each token of the ubatch.
-//     for (uint32_t h = 0; h < 1; ++h) {
-//         for (uint32_t s = 0; s < n_stream; ++s) {
-//             for (uint32_t ii = 0; ii < n_tps; ++ii) {
-//                 const uint32_t i = s*n_tps + ii;
-//                 const llama_seq_id seq_id = ubatch->seq_id[i][0];
-//                 const auto & cells = v_cells[seq_to_stream[seq_id]];
-//                 const llama_pos p1 = ubatch->pos[i];
-//                 const uint64_t idst = n_kv*(h*n_stream*n_tps_pad + s*n_tps_pad + ii);
-
-//                 printf("Token %u (pos=%d): ", i, p1);
-//                 int enabled_for_this_token = 0;
-
-//                 for (uint32_t j = 0; j < n_kv; ++j) {
-//                     total_checks++;
-                    
-//                     if (cells.is_empty(j)) {
-//                         continue;
-//                     }
-
-//                     if (!cells.seq_has(j, seq_id)) {
-//                         continue;
-//                     }
-
-//                     const llama_pos p0 = cells.pos_get(j);
-
-//                     if (causal_attn && p0 > p1) {
-//                         continue;
-//                     }
-
-//                     if (is_masked_swa(p0, p1)) {
-//                         continue;
-//                     }
-
-//                     data[idst + j] = hparams.use_alibi ? -std::abs(p0 - p1) : 0.0f;
-//                     enabled_positions++;
-//                     enabled_for_this_token++;
-//                 }
-                
-//                 printf("can attend to %d positions\n", enabled_for_this_token);
-//             }
-//         }
-//     }
-
-//     printf("MASK SUMMARY: %d/%d positions enabled\n", enabled_positions, total_checks);
-//     printf("=== ATTENTION MASK END ===\n\n");
-// }
-
 void llama_kv_cache_unified::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {
     const uint32_t n_tokens = ubatch->n_tokens;
 
@@ -1485,10 +1281,6 @@ void llama_kv_cache_unified::set_input_kq_mask(ggml_tensor * dst, const llama_ub
     const int64_t n_tps     = n_tokens/n_stream;
     const int64_t n_tps_pad = GGML_PAD(n_tps, GGML_KQ_MASK_PAD);
 
-    printf("=== ATTENTION MASK DEBUG ===\n");
-    printf("n_kv: %ld, n_tokens: %u, n_tps: %ld, causal_attn: %s\n", 
-           n_kv, n_tokens, n_tps, causal_attn ? "TRUE" : "FALSE");
-
     std::fill(data, data + ggml_nelements(dst), -INFINITY);
 
     for (uint32_t h = 0; h < 1; ++h) {
@@ -1499,6 +1291,7 @@ void llama_kv_cache_unified::set_input_kq_mask(ggml_tensor * dst, const llama_ub
                 const auto & cells = v_cells[seq_to_stream[seq_id]];
                 const llama_pos p1 = ubatch->pos[i];
                 
+                // TODO: improve the logic for image token detection, don't hardcode 4
                 bool is_image_token_batch = (n_tps > 1 && p1 == 4);
                 const uint64_t idst = n_kv*(h*n_stream*n_tps_pad + s*n_tps_pad + ii);
 

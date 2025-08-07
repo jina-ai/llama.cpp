@@ -1327,9 +1327,6 @@ static std::unique_ptr<llm_graph_input_attn_kv_unified> build_attn_inp_kv_unifie
         const auto n_kv     = mctx_cur->get_n_kv();
         const auto n_tokens = ubatch.n_tokens;
         const auto n_stream = cparams.kv_unified ? 1 : ubatch.n_seqs_unq;
-        printf("build_attn_inp_kv_unified: n_kv = %d\n", n_kv);
-        printf("build_attn_inp_kv_unified: n_tokens = %d\n", n_tokens);
-        printf("build_attn_inp_kv_unified: n_stream = %d\n", n_stream);
 
         inp->self_k_idxs = mctx_cur->build_input_k_idxs(ctx0, ubatch);
         inp->self_v_idxs = mctx_cur->build_input_v_idxs(ctx0, ubatch);
@@ -1434,13 +1431,11 @@ ggml_tensor * llm_graph_context::build_attn(
 
     // optionally store to KV cache
     if (k_cur) {
-        printf("build_attn: storing k_cur to KV cache\n");
         const auto & k_idxs = is_swa ? inp->get_k_idxs_swa() : inp->get_k_idxs();
         ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
     }
 
     if (v_cur) {
-        printf("build_attn: storing v_cur to KV cache\n");
         const auto & v_idxs = is_swa ? inp->get_v_idxs_swa() : inp->get_v_idxs();
         ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il));
     }
@@ -1456,10 +1451,6 @@ ggml_tensor * llm_graph_context::build_attn(
 
     if (wo) {
         cur = build_lora_mm(wo, cur);
-    }
-
-    if (wo_b) {
-        //cb(cur, "kqv_wo", il);
     }
 
     if (wo_b) {
