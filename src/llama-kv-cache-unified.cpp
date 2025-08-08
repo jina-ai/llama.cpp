@@ -1290,9 +1290,7 @@ void llama_kv_cache_unified::set_input_kq_mask(ggml_tensor * dst, const llama_ub
                 const llama_seq_id seq_id = ubatch->seq_id[i][0];
                 const auto & cells = v_cells[seq_to_stream[seq_id]];
                 const llama_pos p1 = ubatch->pos[i];
-                
-                // bool is_image_token_batch = (n_tps > 1 && p1 == 4);
-                // bool is_image_token_batch = n_tps > 1;
+
                 bool is_image_token_batch = false;
                 if (n_tps > 1) {
                     // Check if all tokens in this batch share the same position
@@ -1330,8 +1328,8 @@ void llama_kv_cache_unified::set_input_kq_mask(ggml_tensor * dst, const llama_ub
                         }
                         position_counter++;
                     }
-                    printf("Token %u [IMAGE] virtual_pos=%ld: can attend to %d positions\n", 
-                           i, virtual_pos, enabled_for_this_token);
+                    // printf("Token %u [IMAGE] virtual_pos=%ld: can attend to %d positions\n", 
+                    //        i, virtual_pos, enabled_for_this_token);
                 } else {
                     // NORMAL PROCESSING for non-image tokens
                     for (uint32_t j = 0; j < n_kv; ++j) {
@@ -1345,8 +1343,8 @@ void llama_kv_cache_unified::set_input_kq_mask(ggml_tensor * dst, const llama_ub
                         data[idst + j] = hparams.use_alibi ? -std::abs(p0 - p1) : 0.0f;
                         enabled_for_this_token++;
                     }
-                    printf("Token %u (pos=%d): can attend to %d positions\n", 
-                           i, p1, enabled_for_this_token);
+                    // printf("Token %u (pos=%d): can attend to %d positions\n", 
+                    //        i, p1, enabled_for_this_token);
                 }
             }
         }
