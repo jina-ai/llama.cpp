@@ -3063,6 +3063,10 @@ class Qwen2VLVisionModel(MmprojModel):
             return gguf.GGMLQuantizationType.F16
         if ".position_embd." in new_name:
             return gguf.GGMLQuantizationType.F32
+        # if "mm.0.w" in new_name or "mm.2.w" in new_name:
+        #     # mm.0.w and mm.1.w are the weights of the final linear layers
+        #     # in Qwen2_5_VL, they are quantized to F32
+        #     return gguf.GGMLQuantizationType.F16
         return False
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
@@ -3094,7 +3098,19 @@ class Qwen2VLVisionModel(MmprojModel):
                     (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight"  , data_torch[:, :, 0, ...]),
                     (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight.1", data_torch[:, :, 1, ...]),
                 ]
+            
             else:
+
+                if ".attn.proj.weight" in name and ".0." in name:  # Only debug layer 0
+                    print(f"\n🔍 DEBUG EXPORT: {name}")
+                    print(f"  Shape: {data_torch.shape}")
+                    print(f"  Dtype: {data_torch.dtype}")
+                    print(f"  First 5 values: {data_torch.flatten()[:5].tolist()}")
+                    # Print first few "patches" (rows)
+                    for i in range(min(5, data_torch.shape[0])):
+                        row_values = data_torch[i, :10].tolist()
+                        print(f"  Row {i}: {[f'{v:.6f}' for v in row_values]}")
+
                 return [(self.map_tensor_name(name), data_torch)]
         return [] # skip other tensors
 

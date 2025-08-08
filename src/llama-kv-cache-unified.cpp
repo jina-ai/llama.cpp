@@ -968,6 +968,7 @@ void llama_kv_cache_unified::apply_ubatch(const slot_info & sinfo, const llama_u
     // note: we want to preserve the invariant that all positions between [pos_min, pos_max] for each sequence
     //       will be present in the cache. so we have to purge any position which is less than those we would overwrite
     //       ref: https://github.com/ggml-org/llama.cpp/pull/13746#issuecomment-2916057092
+    
     for (uint32_t s = 0; s < LLAMA_MAX_SEQ; ++s) {
         if (seq_pos_max_rm[s] == -1) {
             continue;
@@ -1273,65 +1274,77 @@ void llama_kv_cache_unified::set_input_kq_mask(ggml_tensor * dst, const llama_ub
     float * data = (float *) dst->data;
 
     const int64_t n_kv     = dst->ne[0];
-    const int64_t n_stream = dst->ne[3]; // num streams in the current ubatch
+    const int64_t n_stream = dst->ne[3];
 
     GGML_ASSERT(n_tokens%n_stream == 0);
 
-    // n_tps == n_tokens_per_stream
     const int64_t n_tps     = n_tokens/n_stream;
     const int64_t n_tps_pad = GGML_PAD(n_tps, GGML_KQ_MASK_PAD);
 
     std::fill(data, data + ggml_nelements(dst), -INFINITY);
 
-    // Use only the previous KV cells of the correct sequence for each token of the ubatch.
-    // It's assumed that if a token in the batch has multiple sequences, they are equivalent.
-    // Example with a cache of 10 tokens, 2 tokens populated in cache and 3 tokens in batch:
-    //   Causal mask:
-    //      xxx-------
-    //      xxxx------
-    //      xxxxx-----
-    //   Non-causal mask:
-    //      xxxxx-----
-    //      xxxxx-----
-    //      xxxxx-----
-    // To visualize the mask, see https://github.com/ggml-org/llama.cpp/pull/12615
-    // TODO: optimize this section
     for (uint32_t h = 0; h < 1; ++h) {
         for (uint32_t s = 0; s < n_stream; ++s) {
             for (uint32_t ii = 0; ii < n_tps; ++ii) {
                 const uint32_t i = s*n_tps + ii;
-
                 const llama_seq_id seq_id = ubatch->seq_id[i][0];
-
                 const auto & cells = v_cells[seq_to_stream[seq_id]];
-
                 const llama_pos p1 = ubatch->pos[i];
+
+                bool is_image_token_batch = false;
+                if (n_tps > 1) {
+                    // Check if all tokens in this batch share the same position
+                    bool all_same_position = true;
+                    const llama_pos first_pos = ubatch->pos[s*n_tps];
+                    for (uint32_t ii = 1; ii < n_tps; ++ii) {
+                        if (ubatch->pos[s*n_tps + ii] != first_pos) {
+                            all_same_position = false;
+                            break;
+                        }
+                    }
+                    is_image_token_batch = all_same_position;
+                }
 
                 const uint64_t idst = n_kv*(h*n_stream*n_tps_pad + s*n_tps_pad + ii);
 
-                for (uint32_t j = 0; j < n_kv; ++j) {
-                    if (cells.is_empty(j)) {
-                        continue;
+                int enabled_for_this_token = 0;
+                
+                if (is_image_token_batch && causal_attn) {
+                    // FOR IMAGE TOKENS: Limit attention based on virtual position
+                    llama_pos virtual_pos = p1 + ii;  // 4, 5, 6, 7, 8, ...
+                    
+                    // Count positions in sequential order up to virtual_pos
+                    int position_counter = 0;
+                    for (uint32_t j = 0; j < n_kv; ++j) {
+                        if (cells.is_empty(j)) continue;
+                        if (!cells.seq_has(j, seq_id)) continue;
+                        
+                        // Only attend if this is within the virtual causal range
+                        if (position_counter <= virtual_pos) {
+                            if (!is_masked_swa(cells.pos_get(j), p1)) {
+                                data[idst + j] = hparams.use_alibi ? -std::abs(cells.pos_get(j) - p1) : 0.0f;
+                                enabled_for_this_token++;
+                            }
+                        }
+                        position_counter++;
                     }
-
-                    // mask the token if not the same sequence
-                    if (!cells.seq_has(j, seq_id)) {
-                        continue;
+                    // printf("Token %u [IMAGE] virtual_pos=%ld: can attend to %d positions\n", 
+                    //        i, virtual_pos, enabled_for_this_token);
+                } else {
+                    // NORMAL PROCESSING for non-image tokens
+                    for (uint32_t j = 0; j < n_kv; ++j) {
+                        if (cells.is_empty(j)) continue;
+                        if (!cells.seq_has(j, seq_id)) continue;
+                        
+                        const llama_pos p0 = cells.pos_get(j);
+                        if (causal_attn && p0 > p1) continue;
+                        if (is_masked_swa(p0, p1)) continue;
+                        
+                        data[idst + j] = hparams.use_alibi ? -std::abs(p0 - p1) : 0.0f;
+                        enabled_for_this_token++;
                     }
-
-                    const llama_pos p0 = cells.pos_get(j);
-
-                    // mask future tokens
-                    if (causal_attn && p0 > p1) {
-                        continue;
-                    }
-
-                    // apply SWA if any
-                    if (is_masked_swa(p0, p1)) {
-                        continue;
-                    }
-
-                    data[idst + j] = hparams.use_alibi ? -std::abs(p0 - p1) : 0.0f;
+                    // printf("Token %u (pos=%d): can attend to %d positions\n", 
+                    //        i, p1, enabled_for_this_token);
                 }
             }
         }
