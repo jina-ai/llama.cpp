@@ -1292,7 +1292,21 @@ void llama_kv_cache_unified::set_input_kq_mask(ggml_tensor * dst, const llama_ub
                 const llama_pos p1 = ubatch->pos[i];
                 
                 // bool is_image_token_batch = (n_tps > 1 && p1 == 4);
-                bool is_image_token_batch = n_tps > 1;
+                // bool is_image_token_batch = n_tps > 1;
+                bool is_image_token_batch = false;
+                if (n_tps > 1) {
+                    // Check if all tokens in this batch share the same position
+                    bool all_same_position = true;
+                    const llama_pos first_pos = ubatch->pos[s*n_tps];
+                    for (uint32_t ii = 1; ii < n_tps; ++ii) {
+                        if (ubatch->pos[s*n_tps + ii] != first_pos) {
+                            all_same_position = false;
+                            break;
+                        }
+                    }
+                    is_image_token_batch = all_same_position;
+                }
+
                 const uint64_t idst = n_kv*(h*n_stream*n_tps_pad + s*n_tps_pad + ii);
 
                 int enabled_for_this_token = 0;
