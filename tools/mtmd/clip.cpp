@@ -1774,8 +1774,7 @@ private:
     //
 
     void cb(ggml_tensor * cur0, const char * name, int il) const {
-        const char* env_debug = getenv("DEBUG_SAVE_LAYERS");
-        if (env_debug && strcmp(env_debug, "1") == 0) {
+        if (ctx->debug_graph) {
             ggml_tensor * cur = ggml_cpy(ctx0, cur0, ggml_dup_tensor(ctx0, cur0));
             std::string cur_name = il >= 0 ? std::string(name) + "_" + std::to_string(il) : name;
             ggml_set_name(cur, cur_name.c_str());
@@ -4291,9 +4290,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     }
 
 
-    const char* env_debug = getenv("DEBUG_SAVE_LAYERS");
-
-    if (env_debug && strcmp(env_debug, "1") == 0) {
+    if (ctx->debug_graph) {
         log_params_t params = {0};
         params.start_patch = 0;
         params.num_patches = 5;

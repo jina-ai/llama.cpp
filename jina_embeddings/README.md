@@ -1,4 +1,13 @@
 # Installation
+
+Compile with cURL - recommended.
+```bash
+cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-9
+cmake --build build --config Release
+```
+
+
+Compile without cURL - doing this on AIME/A1 because we don't have cURL installed. (NOT RECOMMENDED)
 ```bash
 cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-9 -DLLAMA_CURL=OFF
 cmake --build build --config Release
