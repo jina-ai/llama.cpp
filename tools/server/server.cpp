@@ -4766,17 +4766,6 @@ int main(int argc, char ** argv) {
                 throw std::runtime_error("Failed to tokenize prompt");
             }
 
-            for (size_t chunk_idx = 0; chunk_idx < mtmd_input_chunks_size(chunks.ptr.get()); chunk_idx++) {
-                const mtmd_input_chunk* chunk = mtmd_input_chunks_get(chunks.ptr.get(), chunk_idx);
-                if (mtmd_input_chunk_get_type(chunk) == MTMD_INPUT_CHUNK_TYPE_TEXT) {
-                    size_t n_tokens;
-                    mtmd_input_chunk_get_tokens_text(chunk, &n_tokens);
-                } 
-                else if (mtmd_input_chunk_get_type(chunk) == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
-                    const mtmd_image_tokens* img_tokens = mtmd_input_chunk_get_tokens_image(chunk);
-                }
-            }
-            
             server_tokens tmp(chunks, true);    
             inputs.push_back(std::move(tmp));
             
