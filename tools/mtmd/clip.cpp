@@ -884,7 +884,6 @@ struct clip_graph {
 
         // 🎯 SMART CHECK: Use precomputed embeddings for 280-patch images
         ggml_tensor * inp = nullptr;
-        ggml_tensor * embeddings = nullptr;
 
         // Normal conv2d pipeline
         ggml_tensor * inp_raw = build_inp_raw();
