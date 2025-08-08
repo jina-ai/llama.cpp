@@ -1291,8 +1291,8 @@ void llama_kv_cache_unified::set_input_kq_mask(ggml_tensor * dst, const llama_ub
                 const auto & cells = v_cells[seq_to_stream[seq_id]];
                 const llama_pos p1 = ubatch->pos[i];
                 
-                // TODO: improve the logic for image token detection, don't hardcode 4
-                bool is_image_token_batch = (n_tps > 1 && p1 == 4);
+                // bool is_image_token_batch = (n_tps > 1 && p1 == 4);
+                bool is_image_token_batch = n_tps > 1;
                 const uint64_t idst = n_kv*(h*n_stream*n_tps_pad + s*n_tps_pad + ii);
 
                 int enabled_for_this_token = 0;
@@ -1337,8 +1337,6 @@ void llama_kv_cache_unified::set_input_kq_mask(ggml_tensor * dst, const llama_ub
             }
         }
     }
-
-    printf("=== ATTENTION MASK END ===\n\n");
 }
 
 void llama_kv_cache_unified::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {

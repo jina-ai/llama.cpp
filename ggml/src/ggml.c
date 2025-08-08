@@ -3819,6 +3819,7 @@ struct ggml_tensor * ggml_soft_max_ext_back_inplace(
 }
 
 // ggml_rope
+
 static struct ggml_tensor * ggml_rope_impl(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
