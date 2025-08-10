@@ -265,7 +265,7 @@ def main():
     
     # Configuration
     model_name = "/home/andrei/workspace/jev4-retrieval"
-    image_path = "/home/andrei/workspace/cat.jpg"  # Use same image as old script
+    image_path = "/home/andrei/workspace/dog.jpg"  # Use same image as old script
     output_file = "/home/andrei/workspace/qwen25_pytorch_vit_output.txt"
     max_layers = 32
     
@@ -298,10 +298,33 @@ def main():
     # Use the exact same processing as the old script
     text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     image_inputs, video_inputs = process_vision_info(messages)
+
+    print("\n🖼️  IMAGE PREPROCESSING DEBUG:")
+    if image_inputs:
+        for i, img in enumerate(image_inputs):
+            if hasattr(img, 'size'):
+                print(f"  Image {i}: {img.size} (W x H)")
+            elif hasattr(img, 'shape'):
+                print(f"  Image {i}: shape {img.shape}")
+            else:
+                print(f"  Image {i}: {type(img)}")
+
     
     inputs = processor(
         text=[text], images=image_inputs, videos=video_inputs, padding=True, return_tensors="pt"
     )
+
+    print("\n🔍 PROCESSOR OUTPUT DEBUG:")
+    if 'pixel_values' in inputs:
+        print(f"  pixel_values shape: {inputs['pixel_values'].shape}")
+    if 'image_grid_thw' in inputs:
+        thw = inputs['image_grid_thw']
+        print(f"  image_grid_thw: {thw}")
+        if len(thw.shape) >= 2:
+            for i in range(thw.shape[0]):
+                t, h, w = thw[i].tolist()
+                print(f"    Image {i}: T={t}, H={h}, W={w} -> Total patches: {t*h*w}")
+
     inputs = inputs.to("cuda")
     
     # Log input info
