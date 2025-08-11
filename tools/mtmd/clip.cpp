@@ -3640,9 +3640,9 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         clip_image_u8 resized;
         
         // Hardcode qwen-vl-utils values
-        const int factor = 28;              // IMAGE_FACTOR
-        const int min_pixels = 3136;        // 4 * 28 * 28
-        const int max_pixels = 602112;    // 16384 * 28 * 28
+        const int factor = 28;
+        const int min_pixels = 3136;
+        const int max_pixels = 602112;
         
         // Use smart_resize with hardcoded values
         auto new_size = image_manipulation::smart_resize(original_size, factor, min_pixels, max_pixels);
@@ -4346,7 +4346,8 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     }
 
 
-    if (ctx->debug_graph) {
+    const bool debug_graph = true;
+    if (debug_graph) {
         log_params_t params = {0};
         params.start_patch = 0;
         params.num_patches = 5;
