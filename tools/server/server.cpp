@@ -3394,13 +3394,13 @@ struct server_context {
                         // CAPTURE IMAGE EMBEDDINGS immediately after process_chunk()
                         if (res == 0 && slot.task_type == SERVER_TASK_TYPE_EMBEDDING) {
                             const int n_embd = llama_model_n_embd(model);
-                            int image_embeddings_found = 0;
-                            
+    
+                            int batch_pos = 0;
                             while (true) {
                                 const float * embd = llama_get_embeddings_ith(ctx, batch_pos);
                                 if (embd != nullptr) {
                                     slot.stored_image_embeddings.emplace_back(embd, embd + n_embd);
-                                    image_embeddings_found++;
+                                    batch_pos++;
                                 } else {
                                     break; // Stop at first nullptr
                                 }
@@ -3416,7 +3416,7 @@ struct server_context {
                             //     }
                             // }
                             
-                            printf("STORAGE: Captured %d image embeddings dynamically\n", image_embeddings_found);
+                            printf("STORAGE: Captured %d image embeddings dynamically\n", batch_pos);
                             slot.has_stored_embeddings = true;
                         }
 
