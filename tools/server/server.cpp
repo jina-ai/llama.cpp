@@ -3396,8 +3396,7 @@ struct server_context {
                             const int n_embd = llama_model_n_embd(model);
                             int image_embeddings_found = 0;
                             
-                            // TODO: don't use upper bound, use numnber of image embeddings in the chunk
-                            for (int batch_pos = 0; batch_pos < 512; batch_pos++) { // reasonable upper bound
+                            while (true) {
                                 const float * embd = llama_get_embeddings_ith(ctx, batch_pos);
                                 if (embd != nullptr) {
                                     slot.stored_image_embeddings.emplace_back(embd, embd + n_embd);
@@ -3406,6 +3405,16 @@ struct server_context {
                                     break; // Stop at first nullptr
                                 }
                             }
+
+                            // for (int batch_pos = 0; batch_pos < 512; batch_pos++) { // reasonable upper bound
+                            //     const float * embd = llama_get_embeddings_ith(ctx, batch_pos);
+                            //     if (embd != nullptr) {
+                            //         slot.stored_image_embeddings.emplace_back(embd, embd + n_embd);
+                            //         image_embeddings_found++;
+                            //     } else {
+                            //         break; // Stop at first nullptr
+                            //     }
+                            // }
                             
                             printf("STORAGE: Captured %d image embeddings dynamically\n", image_embeddings_found);
                             slot.has_stored_embeddings = true;
