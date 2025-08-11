@@ -3255,6 +3255,54 @@ struct image_manipulation {
         return {aligned_width, aligned_height};
     }
 
+    static int round_by_factor(int number, int factor) {
+        return ((number + factor / 2) / factor) * factor;
+    }
+
+    static int floor_by_factor(int number, int factor) {
+        return (number / factor) * factor;
+    }
+
+    static int ceil_by_factor(int number, int factor) {
+        return ((number + factor - 1) / factor) * factor;
+    }
+
+    static clip_image_size smart_resize(const clip_image_size & inp_size,  const int factor, const int int_min_pixels, const int max_pixels) {
+
+        // TODO: here should raise error instead 
+        if (inp_size.width <= 0 || inp_size.height <= 0 || factor <= 0) {
+            return {0, 0};
+        }
+
+        int height = inp_size.height;
+        int width = inp_size.width;
+
+        float aspect_ratio = (float)std::max(height, width) / std::min(height, width);
+        if (aspect_ratio > 200.0f) {
+            printf("ERROR: aspect ratio %.2f exceeds limit of 200\n", aspect_ratio);
+            return {0, 0};
+        }
+        
+        // First, round to factor (mandatory step)
+        int h_bar = std::max(factor, round_by_factor(height, factor));
+        int w_bar = std::max(factor, round_by_factor(width, factor));
+        
+        // Check if we need to scale due to pixel limits
+        if (h_bar * w_bar > max_pixels) {
+            // Scale down to fit max_pixels
+            float beta = std::sqrt((float)(height * width) / max_pixels);
+            h_bar = std::max(factor, floor_by_factor((int)(height / beta), factor));
+            w_bar = std::max(factor, floor_by_factor((int)(width / beta), factor));
+        } else if (h_bar * w_bar < min_pixels) {
+            // Scale up to meet min_pixels
+            float beta = std::sqrt((float)min_pixels / (height * width));
+            h_bar = ceil_by_factor((int)(height * beta), factor);
+            w_bar = ceil_by_factor((int)(width * beta), factor);
+        }
+        
+        return {w_bar, h_bar};
+    }
+
 private:
     static inline int clip(int x, int lower, int upper) {
         return std::max(lower, std::min(x, upper));
@@ -3327,6 +3375,7 @@ struct llava_uhd {
             res.grid_size       = clip_image_size{0, 0};
             res.padding_refined = true;
 
+            // TODO: fix this and remove logging after
             LOG_DBG("%s: using pinpoints for slicing\n", __func__);
             LOG_DBG("%s: original size: %d x %d, overview size: %d x %d, refined size: %d x %d\n",
                     __func__, original_width, original_height,
@@ -3589,13 +3638,20 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
 
     } else if (ctx->proj_type() == PROJECTOR_TYPE_QWEN2VL || ctx->proj_type() == PROJECTOR_TYPE_QWEN25VL) {
         clip_image_u8 resized;
-        auto patch_size = params.patch_size * 2;
-        auto new_size = image_manipulation::calc_size_preserved_ratio(original_size, patch_size, params.image_size);
+        
+        // Hardcode qwen-vl-utils values
+        const int factor = 28;              // IMAGE_FACTOR
+        const int min_pixels = 3136;        // 4 * 28 * 28
+        const int max_pixels = 12845056;    // 16384 * 28 * 28
+        
+        // Use smart_resize with hardcoded values
+        auto new_size = image_manipulation::smart_resize(original_size, factor, min_pixels, max_pixels);
         image_manipulation::bicubic_resize(*img, resized, new_size.width, new_size.height);
 
         // LOG AFTER RESIZE
         printf("CLIP_PREPROCESS: Original size: %dx%d\n", original_size.width, original_size.height);
         printf("CLIP_PREPROCESS: Resized to: %dx%d\n", new_size.width, new_size.height);
+        printf("CLIP_PREPROCESS: Factor: %d, Min pixels: %d, Max pixels: %d\n", factor, min_pixels, max_pixels);
         printf("CLIP_PREPROCESS: First 50 resized uint8 pixels: ");
         for (int i = 0; i < std::min(50, (int)(resized.nx * resized.ny * 3)); i++) {
             printf("%d ", (int)resized.buf[i]);
