@@ -226,55 +226,6 @@ void load_tensor_from_file(std::vector<float>& out, int d0, int d1, int d2, cons
     }
 }
 
-void generate_qwen_position_embeddings(
-    float* cos_data, float* sin_data,
-    int grid_h, int grid_w, int spatial_merge_size, 
-    int head_dim) {
-    
-    const int merge_h = grid_h / spatial_merge_size;  // 7
-    const int merge_w = grid_w / spatial_merge_size;  // 10
-    const int n_patches = merge_h * merge_w * spatial_merge_size * spatial_merge_size; // 280
-    const int rope_dim = head_dim / 2; // 40 (since head_dim=80)
-    const float theta = 10000.0f;  // ADDED THIS
-    
-    // Step 1: Generate position IDs exactly like PyTorch
-    std::vector<int> hpos_ids(n_patches);  // ADDED THIS
-    std::vector<int> wpos_ids(n_patches);  // ADDED THIS
-    
-    int patch_idx = 0;
-    for (int bh = 0; bh < merge_h; bh++) {        // 0-6
-        for (int bw = 0; bw < merge_w; bw++) {    // 0-9  
-            for (int sh = 0; sh < spatial_merge_size; sh++) {    // 0-1
-                for (int sw = 0; sw < spatial_merge_size; sw++) { // 0-1
-                    hpos_ids[patch_idx] = bh * spatial_merge_size + sh;
-                    wpos_ids[patch_idx] = bw * spatial_merge_size + sw;
-                    patch_idx++;
-                }
-            }
-        }
-    }
-    
-    // Step 2: Generate rotary embeddings for ALL dimensions (0-79)
-    for (int patch = 0; patch < n_patches; patch++) {
-        int h_pos = hpos_ids[patch];
-        int w_pos = wpos_ids[patch];
-        
-        for (int dim = 0; dim < head_dim; dim++) {  // CHANGED: head_dim instead of rope_dim
-            int pair = dim % rope_dim;  // Map dim to pair
-            float freq = 1.0f / powf(theta, (2.0f * pair) / (float)rope_dim);
-            
-            // For 2D RoPE: use h_pos for even pairs, w_pos for odd pairs
-            float pos = (pair % 2 == 0) ? (float)h_pos : (float)w_pos;
-            float angle = pos * freq;
-            
-            // Store as [patch, dim] layout 
-            int idx = patch * head_dim + dim;
-            cos_data[idx] = cosf(angle);
-            sin_data[idx] = sinf(angle);
-        }
-    }
-}
-
 //#define CLIP_DEBUG_FUNCTIONS
 
 #ifdef CLIP_DEBUG_FUNCTIONS
@@ -4356,8 +4307,9 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         params.start_dim = 0;
         params.num_dims = 10;
             
-        for (size_t i = 0; i < ctx->debug_print_tensors.size(); i++) {
 
+        printf("Debugging graph with %zu tensors\n", ctx->debug_print_tensors.size());
+        for (size_t i = 0; i < ctx->debug_print_tensors.size(); i++) {
             ggml_tensor* t = ctx->debug_print_tensors[i];
             if (!t->name) continue;
 
