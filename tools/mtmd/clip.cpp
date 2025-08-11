@@ -3267,7 +3267,7 @@ struct image_manipulation {
         return ((number + factor - 1) / factor) * factor;
     }
 
-    static clip_image_size smart_resize(const clip_image_size & inp_size,  const int factor, const int int_min_pixels, const int max_pixels) {
+    static clip_image_size smart_resize(const clip_image_size & inp_size,  const int factor, const int min_pixels, const int max_pixels) {
 
         // TODO: here should raise error instead 
         if (inp_size.width <= 0 || inp_size.height <= 0 || factor <= 0) {
