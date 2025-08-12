@@ -833,9 +833,6 @@ struct clip_graph {
 
         int mrope_sections[4] = {d_head/4, d_head/4, d_head/4, d_head/4};
 
-        // 🎯 SMART CHECK: Use precomputed embeddings for 280-patch images
-        ggml_tensor * inp = nullptr;
-
         // Normal conv2d pipeline
         ggml_tensor * inp_raw = build_inp_raw();
         cb(inp_raw, "inp_raw", -1);
@@ -844,7 +841,7 @@ struct clip_graph {
         GGML_ASSERT(img.nx % (patch_size * 2) == 0);
         GGML_ASSERT(img.ny % (patch_size * 2) == 0);
 
-        inp = inp_0;  
+        ggml_tensor * inp = inp_0;  
 
         // second conv dimension
         {
@@ -3254,6 +3251,56 @@ struct image_manipulation {
         return {w_bar, h_bar};
     }
 
+    std::vector<float> patchify_qwen2vl(
+        const clip_image_f32 & img_f32,  // normalized float image [H, W, C] channel-last
+        int patch_size,
+        int merge_size,
+        int temporal_patch_size
+    ) {
+        int H = img_f32.ny;
+        int W = img_f32.nx;
+        int C = img_f32.nc;  // should be 3 for RGB
+
+        assert(H % patch_size == 0 && W % patch_size == 0);
+
+        // Number of patches along each dim BEFORE merge
+        int grid_h = H / patch_size;
+        int grid_w = W / patch_size;
+
+        // In Qwen2-VL for images, grid_t = 1 (no temporal dimension for static image)
+        int grid_t = 1;
+
+        // Vector length of one patch
+        int patch_vec_len = C * temporal_patch_size * patch_size * patch_size;
+
+        // Total number of patches (grid_t * grid_h * grid_w)
+        int num_patches = grid_t * grid_h * grid_w;
+
+        std::vector<float> out;
+        out.resize(num_patches * patch_vec_len);
+
+        // Iterate over patch grid
+        int patch_idx = 0;
+        for (int gh = 0; gh < grid_h; gh++) {
+            for (int gw = 0; gw < grid_w; gw++) {
+                // Extract this patch
+                for (int c = 0; c < C; c++) {
+                    for (int py = 0; py < patch_size; py++) {
+                        for (int px = 0; px < patch_size; px++) {
+                            float val = img_f32.buf[
+                                ((gh * patch_size + py) * W + (gw * patch_size + px)) * C + c
+                            ];
+                            out[patch_idx * patch_vec_len + (c * patch_size * patch_size) + (py * patch_size + px)] = val;
+                        }
+                    }
+                }
+                patch_idx++;
+            }
+        }
+
+        return out;
+    }
+
 private:
     static inline int clip(int x, int lower, int upper) {
         return std::max(lower, std::min(x, upper));
@@ -3617,6 +3664,19 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         printf("CLIP_PREPROCESS: First 50 normalized float pixels: ");
         for (int i = 0; i < std::min(50, (int)img_f32->buf.size()); i++) {
             printf("%.6f ", img_f32->buf[i]);
+        }
+        printf("\n");
+
+        // Patchify (PyTorch _preprocess equivalent)
+        auto patches = image_manipulation::patchify_qwen2vl(*img_f32, /*patch_size=*/14, /*merge_size=*/2, /*temporal_patch_size=*/1);
+
+        printf("PATCHIFY: total patches = %d, patch vector length = %d\n",
+            (int)(patches.size() / (3 * 14 * 14)), 3 * 14 * 14);
+
+        // Example log: first patch first 10 vals
+        printf("PATCHIFY: First patch first 10 vals: ");
+        for (int i = 0; i < 10; i++) {
+            printf("%.6f ", patches[i]);
         }
         printf("\n");
 

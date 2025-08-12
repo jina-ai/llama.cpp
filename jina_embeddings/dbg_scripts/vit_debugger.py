@@ -112,4 +112,4 @@ class VitDebugger:
 
 # --- Singleton instance ---
 log_params = LogParams(start_patch=0, num_patches=3, start_head=0, num_heads=5, start_dim=0, num_dims=10)
-vit_debugger = VitDebugger(log_file="/home/andrei/workspace/jev4-vit-outputs.txt", params=log_params)
+vit_debugger = VitDebugger(log_file=None, params=log_params)
