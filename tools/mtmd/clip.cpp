@@ -4307,10 +4307,9 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         params.start_dim = 0;
         params.num_dims = 10;
             
-
         printf("Debugging graph with %zu tensors\n", ctx->debug_print_tensors.size());
         for (size_t i = 0; i < ctx->debug_print_tensors.size(); i++) {
-            ggml_tensor* t = ctx->debug_print_tensors[i];
+            ggml_tensor * t = ctx->debug_print_tensors[i];
             if (!t->name) continue;
 
             // Apply name filter
@@ -4326,7 +4325,15 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 strstr(t->name, "layer_out") ||
                 strstr(t->name, "post_norm") ||
                 strstr(t->name, "image_embeddings")
-            ) log_to_file_or_console_parameterized(nullptr, t, &params);
+            ) {
+                try {
+                    log_to_file_or_console_parameterized(nullptr, t, &params);
+                } catch (const std::exception& e) {
+                    printf("ERROR logging tensor %s: %s\n", t->name ? t->name : "unknown", e.what());
+                } catch (...) {
+                    printf("UNKNOWN ERROR logging tensor %s\n", t->name ? t->name : "unknown");
+                }
+            }
         }
     }
 
