@@ -67,154 +67,71 @@ void log_to_file_or_console_parameterized(
     ggml_tensor* t,
     const log_params_t* params
 ) {
-    printf("DEBUG: Entering log function\n"); fflush(stdout);
-    
-    if (!t) {
-        printf("DEBUG: Tensor is null, returning\n"); fflush(stdout);
-        return;
-    }
-    
-    printf("DEBUG: Tensor pointer valid: %p\n", (void*)t); fflush(stdout);
-    
-    if (!t->name) {
-        printf("DEBUG: Tensor name is null, continuing anyway\n"); fflush(stdout);
-    } else {
-        printf("DEBUG: Tensor name: %s\n", t->name); fflush(stdout);
-    }
-    
-    printf("DEBUG: Checking tensor dimensions\n"); fflush(stdout);
-    printf("DEBUG: ne[0]=%ld, ne[1]=%ld, ne[2]=%ld, ne[3]=%ld\n", 
-           t->ne[0], t->ne[1], t->ne[2], t->ne[3]); fflush(stdout);
+    if (!t) return;
     
     // Use default parameters if none provided
-    printf("DEBUG: Setting up parameters\n"); fflush(stdout);
     log_params_t default_params = create_default_log_params();
-    if (!params) {
-        printf("DEBUG: Using default params\n"); fflush(stdout);
-        params = &default_params;
-    }
+    if (!params) params = &default_params;
     
-    printf("DEBUG: Creating print macro\n"); fflush(stdout);
     #define PRINT_TO_OUTPUT(format, ...) \
         do { \
             if (output_file) fprintf(output_file, format, ##__VA_ARGS__); \
             else printf(format, ##__VA_ARGS__); \
         } while (0)
     
-    printf("DEBUG: About to print tensor name and shape\n"); fflush(stdout);
-    
-    PRINT_TO_OUTPUT("=== %s === Shape: [", t->name ? t->name : "unnamed");
-    printf("DEBUG: Printed tensor name\n"); fflush(stdout);
-    
+    PRINT_TO_OUTPUT("=== %s === Shape: [", t->name);
     for (int d = 0; d < GGML_MAX_DIMS && t->ne[d] > 0; d++) {
-        printf("DEBUG: Printing dimension %d: %ld\n", d, t->ne[d]); fflush(stdout);
         PRINT_TO_OUTPUT("%ld", t->ne[d]);
         if (d < GGML_MAX_DIMS - 1 && t->ne[d+1] > 0) {
             PRINT_TO_OUTPUT(", ");
         }
     }
     PRINT_TO_OUTPUT("]\n");
-    printf("DEBUG: Finished printing shape\n"); fflush(stdout);
     
-    printf("DEBUG: Calculating tensor size\n"); fflush(stdout);
     size_t tensor_size = ggml_nelements(t);
-    printf("DEBUG: Tensor size: %zu\n", tensor_size); fflush(stdout);
-    
     if (tensor_size == 0) {
         PRINT_TO_OUTPUT("Empty tensor\n\n");
-        printf("DEBUG: Empty tensor, returning\n"); fflush(stdout);
         return;
     }
-    
-    printf("DEBUG: Checking tensor data pointer\n"); fflush(stdout);
-    if (!t->data) {
-        printf("DEBUG: Tensor data is null!\n"); fflush(stdout);
-        PRINT_TO_OUTPUT("Tensor data is null!\n\n");
-        return;
-    }
-    
-    printf("DEBUG: Tensor data pointer: %p\n", t->data); fflush(stdout);
-    printf("DEBUG: Casting to float*\n"); fflush(stdout);
     
     float* data = (float*)t->data;
-    printf("DEBUG: Float data pointer: %p\n", (void*)data); fflush(stdout);
-    
-    printf("DEBUG: About to test first data access\n"); fflush(stdout);
-    // Test accessing the first element
-    volatile float test_val = data[0];
-    printf("DEBUG: First value successfully read: %.6f\n", test_val); fflush(stdout);
-    
-    printf("DEBUG: Checking tensor dimensions for processing\n"); fflush(stdout);
     
     if (t->ne[2] <= 1) {
-        printf("DEBUG: Processing as 2D tensor\n"); fflush(stdout);
-        
         // 2D tensor: [d_head, n_patch] in GGML
         const int d_head = t->ne[0];
         const int n_patch = t->ne[1];
-        
-        printf("DEBUG: 2D tensor - d_head=%d, n_patch=%d\n", d_head, n_patch); fflush(stdout);
         
         // Calculate patch range
         int start_patch = std::max(0, std::min(params->start_patch, n_patch - 1));
         int end_patch = std::min(start_patch + params->num_patches, n_patch);
         
-        printf("DEBUG: Patch range: %d to %d\n", start_patch, end_patch); fflush(stdout);
-        
         // Calculate dimension range
         int start_dim = std::max(0, std::min(params->start_dim, d_head - 1));
         int end_dim = std::min(start_dim + params->num_dims, d_head);
         
-        printf("DEBUG: Dim range: %d to %d\n", start_dim, end_dim); fflush(stdout);
-        
         PRINT_TO_OUTPUT("Logging patches %d-%d, dimensions %d-%d\n", 
                        start_patch, end_patch - 1, start_dim, end_dim - 1);
         
-        printf("DEBUG: Starting patch loop\n"); fflush(stdout);
-        
         for (int patch = start_patch; patch < end_patch; patch++) {
-            printf("DEBUG: Processing patch %d\n", patch); fflush(stdout);
-            
             PRINT_TO_OUTPUT("Patch %d: ", patch);
             
             for (int head_dim = start_dim; head_dim < end_dim; head_dim++) {
-                printf("DEBUG: Processing dim %d in patch %d\n", head_dim, patch); fflush(stdout);
-                
                 size_t ggml_idx = patch * d_head + head_dim;
-                printf("DEBUG: Calculated index: %zu (patch=%d * d_head=%d + head_dim=%d)\n", 
-                       ggml_idx, patch, d_head, head_dim); fflush(stdout);
-                
-                if (ggml_idx >= tensor_size) {
-                    printf("DEBUG: Index out of bounds! %zu >= %zu\n", ggml_idx, tensor_size); fflush(stdout);
-                    PRINT_TO_OUTPUT("INDEX_OUT_OF_BOUNDS ");
-                    continue;
-                }
-                
-                printf("DEBUG: About to read data[%zu]\n", ggml_idx); fflush(stdout);
-                volatile float val = data[ggml_idx];
-                printf("DEBUG: Successfully read value: %.6f\n", val); fflush(stdout);
-                
-                PRINT_TO_OUTPUT("%.6f ", val);
+                PRINT_TO_OUTPUT("%.6f ", data[ggml_idx]);
             }
             if (end_dim < d_head) {
                 PRINT_TO_OUTPUT("... (dims %d-%d)", end_dim, d_head - 1);
             }
             PRINT_TO_OUTPUT("\n");
-            printf("DEBUG: Finished patch %d\n", patch); fflush(stdout);
         }
-        
         if (end_patch < n_patch) {
             PRINT_TO_OUTPUT("... (patches %d-%d not shown)\n", end_patch, n_patch - 1);
         }
     } else {
-        printf("DEBUG: Processing as 3D tensor\n"); fflush(stdout);
-        
         // 3D tensor: [d_head, n_head, n_patch] in GGML
         const int d_head = t->ne[0];
         const int n_head = t->ne[1];
         const int n_patch = t->ne[2];
-        
-        printf("DEBUG: 3D tensor - d_head=%d, n_head=%d, n_patch=%d\n", d_head, n_head, n_patch); fflush(stdout);
         
         // Calculate ranges
         int start_patch = std::max(0, std::min(params->start_patch, n_patch - 1));
@@ -226,42 +143,19 @@ void log_to_file_or_console_parameterized(
         int start_dim = std::max(0, std::min(params->start_dim, d_head - 1));
         int end_dim = std::min(start_dim + params->num_dims, d_head);
         
-        printf("DEBUG: 3D ranges - patches:%d-%d, heads:%d-%d, dims:%d-%d\n", 
-               start_patch, end_patch-1, start_head, end_head-1, start_dim, end_dim-1); fflush(stdout);
-        
         PRINT_TO_OUTPUT("Logging patches %d-%d, heads %d-%d, dimensions %d-%d\n", 
                        start_patch, end_patch - 1, start_head, end_head - 1, 
                        start_dim, end_dim - 1);
         
-        printf("DEBUG: Starting 3D loops\n"); fflush(stdout);
-        
         for (int patch = start_patch; patch < end_patch; patch++) {
-            printf("DEBUG: 3D Processing patch %d\n", patch); fflush(stdout);
-            
             PRINT_TO_OUTPUT("Patch %d\n", patch);
             
             for (int head = start_head; head < end_head; head++) {
-                printf("DEBUG: 3D Processing head %d in patch %d\n", head, patch); fflush(stdout);
-                
                 PRINT_TO_OUTPUT("  Head %d: ", head);
                 
                 for (int head_dim = start_dim; head_dim < end_dim; head_dim++) {
-                    printf("DEBUG: 3D Processing dim %d in head %d, patch %d\n", head_dim, head, patch); fflush(stdout);
-                    
                     size_t ggml_idx = patch * (d_head * n_head) + head * d_head + head_dim;
-                    printf("DEBUG: 3D Calculated index: %zu\n", ggml_idx); fflush(stdout);
-                    
-                    if (ggml_idx >= tensor_size) {
-                        printf("DEBUG: 3D Index out of bounds! %zu >= %zu\n", ggml_idx, tensor_size); fflush(stdout);
-                        PRINT_TO_OUTPUT("INDEX_OUT_OF_BOUNDS ");
-                        continue;
-                    }
-                    
-                    printf("DEBUG: 3D About to read data[%zu]\n", ggml_idx); fflush(stdout);
-                    volatile float val = data[ggml_idx];
-                    printf("DEBUG: 3D Successfully read value: %.6f\n", val); fflush(stdout);
-                    
-                    PRINT_TO_OUTPUT("%.6f ", val);
+                    PRINT_TO_OUTPUT("%.6f ", data[ggml_idx]);
                 }
                 if (end_dim < d_head) {
                     PRINT_TO_OUTPUT("... (dims %d-%d)", end_dim, d_head - 1);
@@ -278,7 +172,6 @@ void log_to_file_or_console_parameterized(
     }
     
     PRINT_TO_OUTPUT("\n");
-    printf("DEBUG: Exiting log function successfully\n"); fflush(stdout);
     #undef PRINT_TO_OUTPUT
 }
 
@@ -4403,9 +4296,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         return false;
     }
 
-
-    const bool debug_graph = true;
-    if (debug_graph) {
+    if (ctx->debug_graph) {
         log_params_t params = {0};
         params.start_patch = 0;
         params.num_patches = 5;
