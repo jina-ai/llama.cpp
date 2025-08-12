@@ -3251,54 +3251,71 @@ struct image_manipulation {
         return {w_bar, h_bar};
     }
 
-    std::vector<float> patchify_qwen2vl(
-        const clip_image_f32 & img_f32,  // normalized float image [H, W, C] channel-last
+    static std::vector<float> patchify_qwen2vl(
+        const clip_image_f32 & img_f32,
         int patch_size,
-        int merge_size,
-        int temporal_patch_size
+        int merge_size,               // ignored for Torch match
+        int temporal_patch_size,
+        size_t & out_patch_count,
+        size_t & out_patch_vec_len
     ) {
-        int H = img_f32.ny;
-        int W = img_f32.nx;
-        int C = img_f32.nc;  // should be 3 for RGB
+        // Dimensions
+        const int H = img_f32.ny;   // height
+        const int W = img_f32.nx;   // width
+        const int C = 3;            // RGB
 
-        assert(H % patch_size == 0 && W % patch_size == 0);
+        // Print image info
+        printf("PATCHIFY: Image size: W=%d, H=%d, C=%d\n", W, H, C);
 
-        // Number of patches along each dim BEFORE merge
-        int grid_h = H / patch_size;
-        int grid_w = W / patch_size;
+        // Compute grid
+        const int grid_h = H / patch_size;
+        const int grid_w = W / patch_size;
+        const int T      = temporal_patch_size;
 
-        // In Qwen2-VL for images, grid_t = 1 (no temporal dimension for static image)
-        int grid_t = 1;
+        out_patch_count   = grid_h * grid_w;
+        out_patch_vec_len = C * patch_size * patch_size * T;
 
-        // Vector length of one patch
-        int patch_vec_len = C * temporal_patch_size * patch_size * patch_size;
+        printf("PATCHIFY: patch_size=%d, temporal_patch_size=%d\n", patch_size, T);
+        printf("PATCHIFY: grid_h=%d, grid_w=%d => total patches=%zu\n", grid_h, grid_w, out_patch_count);
+        printf("PATCHIFY: vector length per patch = %zu floats\n", out_patch_vec_len);
 
-        // Total number of patches (grid_t * grid_h * grid_w)
-        int num_patches = grid_t * grid_h * grid_w;
+        // Index sanity check before patchification
+        printf("PATCHIFY: First 10 floats of channel 0, row 0: ");
+        for (int i = 0; i < std::min(W, 10); ++i) {
+            size_t idx = ((size_t)0 * H + 0) * W + i;
+            printf("%.6f ", img_f32.buf[idx]);
+        }
+        printf("\n");
 
-        std::vector<float> out;
-        out.resize(num_patches * patch_vec_len);
+        std::vector<float> patches;
+        patches.reserve(out_patch_count * out_patch_vec_len);
 
-        // Iterate over patch grid
-        int patch_idx = 0;
-        for (int gh = 0; gh < grid_h; gh++) {
-            for (int gw = 0; gw < grid_w; gw++) {
-                // Extract this patch
-                for (int c = 0; c < C; c++) {
-                    for (int py = 0; py < patch_size; py++) {
-                        for (int px = 0; px < patch_size; px++) {
-                            float val = img_f32.buf[
-                                ((gh * patch_size + py) * W + (gw * patch_size + px)) * C + c
-                            ];
-                            out[patch_idx * patch_vec_len + (c * patch_size * patch_size) + (py * patch_size + px)] = val;
+        for (int gh = 0; gh < grid_h; ++gh) {
+            for (int gw = 0; gw < grid_w; ++gw) {
+                for (int t = 0; t < T; ++t) {
+                    for (int c = 0; c < C; ++c) {
+                        for (int ph = 0; ph < patch_size; ++ph) {
+                            for (int pw = 0; pw < patch_size; ++pw) {
+                                int y = gh * patch_size + ph;
+                                int x = gw * patch_size + pw;
+                                size_t idx = ((size_t)c * H + y) * W + x;
+                                idx += t * (C * H * W);
+                                patches.push_back(img_f32.buf[idx]);
+                            }
                         }
                     }
                 }
-                patch_idx++;
             }
         }
 
-        return out;
+        // Dump first patch
+        printf("PATCHIFY: First patch, first 20 floats: ");
+        for (int i = 0; i < std::min<int>(20, out_patch_vec_len); ++i) {
+            printf("%.6f ", patches[i]);
+        }
+        printf("...\n");
+
+        return patches;
     }
 
 private:
@@ -3668,17 +3685,17 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         printf("\n");
 
         // Patchify (PyTorch _preprocess equivalent)
-        auto patches = image_manipulation::patchify_qwen2vl(*img_f32, /*patch_size=*/14, /*merge_size=*/2, /*temporal_patch_size=*/1);
+        size_t patch_count, patch_vec_len;
 
-        printf("PATCHIFY: total patches = %d, patch vector length = %d\n",
-            (int)(patches.size() / (3 * 14 * 14)), 3 * 14 * 14);
+        auto patches = image_manipulation::patchify_qwen2vl(
+            *img_f32,
+            /*patch_size=*/14,
+            /*merge_size=*/2,        // ignored here
+            /*temporal_patch_size=*/2,
+            patch_count,
+            patch_vec_len
+        );
 
-        // Example log: first patch first 10 vals
-        printf("PATCHIFY: First patch first 10 vals: ");
-        for (int i = 0; i < 10; i++) {
-            printf("%.6f ", patches[i]);
-        }
-        printf("\n");
 
         res_imgs->entries.push_back(std::move(img_f32));
         return true;

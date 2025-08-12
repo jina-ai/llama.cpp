@@ -6,11 +6,16 @@ cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-9
 cmake --build build --config Release
 ```
 
-
 Compile without cURL - doing this on AIME/A1 because we don't have cURL installed. (NOT RECOMMENDED)
 ```bash
 cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-9 -DLLAMA_CURL=OFF
 cmake --build build --config Release
+```
+
+Compile on Mac (cpu only).
+```bash
+cmake -B build -DGGML_METAL=OFF
+cmake --build build --config Release -j
 ```
 
 # Mteb eval
@@ -46,6 +51,36 @@ python infer_cosine.py   \
     --query-prefix "Query: "   \
     --document-prefix "Passage: "   \
     --normalize
+```
+
+```bash
+python jina_embeddings/infer_cosine.py   \
+    --llama-bin /Users/andrei/Documents/GitHub/jina-llama.cpp/build/bin/llama-server   \
+    --model /Users/andrei/Documents/gguf/jev4-bf16.gguf   \
+    --mmproj /Users/andrei/Documents/gguf/mmproj-jev4-bf16.gguf   \
+    --input /Users/andrei/Documents/GitHub/jina-llama.cpp/jina_embeddings/assets/test_data.txt  \
+    --output /Users/andrei/Documents/GitHub/jina-llama.cpp/jina_embeddings/temp/jev4_mmtd.md   \
+    --query-prefix "Query: "   \
+    --document-prefix "Passage: "   \
+    --normalize
+```
+
+# Conversion
+
+```bash
+huggingface-cli download jinaai/jev4-retrieval --local-dir /Users/andrei/Downloads/jev4-retrieval
+
+python convert_hf_to_gguf.py \
+    /Users/andrei/Downloads/jev4-retrieval \
+    --outtype bf16 \
+    --outfile /Users/andrei/Documents/gguf/jev4-bf16.gguf
+
+python convert_hf_to_gguf.py \
+    /Users/andrei/Downloads/jev4-retrieval \
+    --mmproj \
+    --outtype bf16 \
+    --outfile /Users/andrei/Documents/gguf/jev4-bf16.gguf \
+    --verbose
 ```
 
 # Quantization

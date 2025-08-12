@@ -1,11 +1,11 @@
 import json
 import os
-import click
-import numpy as np
+import click # type: ignore
+import numpy as np # type: ignore
 from sklearn.metrics.pairwise import cosine_similarity
-import torch
-from transformers import AutoModel
-from PIL import Image
+import torch # type: ignore
+from transformers import AutoModel # type: ignore
+from PIL import Image # type: ignore
 import requests
 from io import BytesIO
 
@@ -314,4 +314,4 @@ def main(model, device, input_path, output_path, save_cosine_sim_path):
 
 
 if __name__ == '__main__':
-    main()
+    main() # type: ignore

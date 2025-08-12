@@ -1,0 +1,1 @@
+[IMAGE] /Users/andrei/Documents/GitHub/jina-llama.cpp/jina_embeddings/assets/dog.jpg
