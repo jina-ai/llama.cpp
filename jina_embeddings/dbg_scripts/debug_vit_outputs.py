@@ -127,7 +127,7 @@ class VitDebugger:
     
     def save_outputs(self, max_layers: int = 32):
         """Save captured outputs to file"""
-        key_order = ['input_raw', 'patch_embeddings_final', 'input_to_layers']
+        key_order = ['raw_pixels_before_preprocess', 'input_raw', 'patch_embeddings_final', 'input_to_layers']
         
         # Add layer outputs
         for i in range(max_layers):
@@ -146,18 +146,36 @@ class VitDebugger:
                     f.write(formatted_output + "\n\n")
 
 
-def setup_hooks(model, debugger: VitDebugger, max_layers: int = 32):
+def setup_hooks(model, processor, debugger: VitDebugger, max_layers: int = 32):
     """Setup forward hooks using original Qwen processing style"""
+
+    print("Setting up hooks for processor ...")
+
+    # Hook into _preprocess to capture raw pixels
+    original_preprocess = processor.image_processor._preprocess
+
+    def hooked_preprocess(self, images, **kwargs):
+        # images here should be the raw normalized pixels before reshaping
+        if hasattr(images, 'shape') and len(images) > 0:
+            if isinstance(images, list):
+                first_img = images[0]
+            else:
+                first_img = images
+            debugger.layer_outputs["raw_pixels_before_preprocess"] = first_img.detach().cpu() if hasattr(first_img, 'detach') else first_img
+            print(f"🔥 raw_pixels_before_preprocess: {first_img.shape if hasattr(first_img, 'shape') else type(first_img)}")
+        
+        # Call original method
+        return original_preprocess(images, **kwargs)
+
+    # Monkey patch the method
+    processor.image_processor._preprocess = hooked_preprocess.__get__(processor.image_processor, type(processor.image_processor))
+
     print(f"Setting up hooks for {max_layers} layers...")
     
     # Find vision model
     vision_model = None
     if hasattr(model, 'visual'):
         vision_model = model.visual
-    elif hasattr(model, 'vision_model'):
-        vision_model = model.vision_model
-    elif hasattr(model, 'vision'):
-        vision_model = model.vision
     else:
         print("ERROR: Cannot find vision model!")
         return
@@ -284,7 +302,7 @@ def main():
     processor = Qwen2_5_VLProcessor.from_pretrained(model_name)
     
     print("STEP 2: Setting up hooks...")
-    setup_hooks(model, debugger, max_layers)
+    setup_hooks(model, processor, debugger, max_layers)
     
     print("STEP 3: Processing image using original Qwen method...")
     messages = [{
@@ -317,6 +335,7 @@ def main():
     print("\n🔍 PROCESSOR OUTPUT DEBUG:")
     if 'pixel_values' in inputs:
         print(f"  pixel_values shape: {inputs['pixel_values'].shape}")
+        
     if 'image_grid_thw' in inputs:
         thw = inputs['image_grid_thw']
         print(f"  image_grid_thw: {thw}")
