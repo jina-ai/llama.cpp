@@ -70,13 +70,12 @@ python jina_embeddings/infer_cosine.py   \
 ```bash
 huggingface-cli download jinaai/jev4-retrieval --local-dir /Users/andrei/Downloads/jev4-retrieval
 
-python convert_hf_to_gguf.py \
-    /Users/andrei/Downloads/jev4-retrieval \
+python convert_hf_to_gguf.py /Users/andrei/Downloads/jev4-retrieval \
     --outtype bf16 \
     --outfile /Users/andrei/Documents/gguf/jev4-bf16.gguf
 
-python convert_hf_to_gguf.py \
-    /Users/andrei/Downloads/jev4-retrieval \
+QWEN_EXPORT_BIN_DIR="/Users/andrei/Documents/gguf" \
+python convert_hf_to_gguf.py /Users/andrei/Downloads/jev4-retrieval \
     --mmproj \
     --outtype bf16 \
     --outfile /Users/andrei/Documents/gguf/jev4-bf16.gguf \
