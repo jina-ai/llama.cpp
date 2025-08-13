@@ -3255,86 +3255,147 @@ struct image_manipulation {
     }
 
     // Qwen2-VL patchification to match Torch processor._preprocess()
-// Assumes img_f32.buf is HWC interleaved RGB per frame
+    // Assumes img_f32.buf is HWC interleaved RGB per frame
     // Fully honours merge_size, temporal duplication, and per-patch vectorization order
     // Torch order after transpose: [merge_h, merge_w, channel, temporal, ph, pw] with pw fastest
 
+    // static std::vector<float> patchify_qwen2vl(
+    //         const clip_image_f32 & img_f32,
+    //         int patch_size,
+    //         int merge_size,
+    //         int temporal_patch_size,
+    //         size_t & out_patch_count,
+    //         size_t & out_patch_vec_len
+    //     ) {
+    //     const int H = img_f32.ny;   // height
+    //     const int W = img_f32.nx;   // width
+    //     const int C = 3;            // RGB
+
+    //     // Frame stride in floats (HWC layout)
+    //     const size_t frame_stride = (size_t)H * W * C;
+    //     const size_t total_floats = img_f32.buf.size();
+    //     const int T_src = (int)(total_floats / frame_stride); // typically 1 for single image
+    //     const int T_req = temporal_patch_size;                // usually 2 for Qwen2-VL
+
+    //     // Grid in merged space
+    //     const int grid_h = H / (patch_size * merge_size);
+    //     const int grid_w = W / (patch_size * merge_size);
+
+    //     out_patch_count   = (size_t)grid_h * grid_w * merge_size * merge_size;
+    //     out_patch_vec_len = (size_t)C * T_req * patch_size * patch_size;
+
+    //     printf("PATCHIFY: Image size: W=%d, H=%d, C=%d\n", W, H, C);
+    //     printf("PATCHIFY: patch_size=%d, merge_size=%d, temporal_patch_size=%d\n",
+    //         patch_size, merge_size, T_req);
+    //     printf("PATCHIFY: frames_in_buffer (T_src)=%d, will_effectively_use=%d (Torch repeats last if needed)\n",
+    //         T_src, std::max(T_src, T_req));
+    //     printf("PATCHIFY: grid_h=%d, grid_w=%d => total patches=%zu\n",
+    //         grid_h, grid_w, out_patch_count);
+    //     printf("PATCHIFY: vector length per patch = %zu floats\n", out_patch_vec_len);
+
+    //     // First-row probe (channel 0, y=0)
+    //     if (total_floats >= (size_t)W * C) {
+    //         printf("PATCHIFY: First 10 floats of channel 0, row 0: ");
+    //         for (int i = 0; i < std::min(W, 10); ++i) {
+    //             size_t idx = 0 * frame_stride + 0 * W * C + i * C + 0;
+    //             printf("%.6f ", img_f32.buf[idx]);
+    //         }
+    //         printf("\n");
+    //     }
+
+    //     // Allocate output
+    //     std::vector<float> patches;
+    //     patches.resize(out_patch_count * out_patch_vec_len);
+    //     float *dst = patches.data();
+    //     size_t write = 0;
+
+    //     // Traverse patches in grid order
+    //     for (int gh = 0; gh < grid_h; ++gh) {
+    //         for (int gw = 0; gw < grid_w; ++gw) {
+
+    //             // merge_size splits inside each coarse grid cell
+    //             for (int ms_h = 0; ms_h < merge_size; ++ms_h) {
+    //                 for (int ms_w = 0; ms_w < merge_size; ++ms_w) {
+
+    //                     // Per-patch vector order: channel → temporal → ph → pw (pw fastest)
+    //                     for (int c = 0; c < C; ++c) {
+    //                         for (int t = 0; t < T_req; ++t) {
+    //                             const int t_eff = (T_src == 0) ? 0 : std::min(t, T_src - 1);
+
+    //                             for (int ph = 0; ph < patch_size; ++ph) {
+    //                                 const int y = gh * (patch_size * merge_size) + ms_h * patch_size + ph;
+
+    //                                 for (int pw = 0; pw < patch_size; ++pw) {
+    //                                     const int x = gw * (patch_size * merge_size) + ms_w * patch_size + pw;
+
+    //                                     size_t idx = (size_t)t_eff * frame_stride +
+    //                                                 (size_t)y * W * C +
+    //                                                 (size_t)x * C +
+    //                                                 (size_t)c;
+
+    //                                     dst[write++] = img_f32.buf[idx];
+    //                                 }
+    //                             }
+    //                         }
+    //                     }
+    //                 }
+    //             }
+    //         }
+    //     }
+
+    //     // Preview first patch
+    //     printf("PATCHIFY: First patch, first 20 floats: ");
+    //     for (int i = 0; i < std::min<int>(20, out_patch_vec_len); ++i) {
+    //         printf("%.6f ", patches[i]);
+    //     }
+    //     printf("...\n");
+
+    //     return patches;
+    // }
+
     static std::vector<float> patchify_qwen2vl(
-            const clip_image_f32 & img_f32,
-            int patch_size,
-            int merge_size,
-            int temporal_patch_size,
-            size_t & out_patch_count,
-            size_t & out_patch_vec_len
-        ) {
-        const int H = img_f32.ny;   // height
-        const int W = img_f32.nx;   // width
-        const int C = 3;            // RGB
+        const clip_image_f32 & img_f32,
+        int patch_size,
+        int merge_size,
+        int temporal_patch_size, // usually 2
+        size_t & out_patch_count,
+        size_t & out_patch_vec_len
+    ) {
+        const int W = img_f32.nx;
+        const int H = img_f32.ny;
+        const int C = 3;
 
-        // Frame stride in floats (HWC layout)
         const size_t frame_stride = (size_t)H * W * C;
-        const size_t total_floats = img_f32.buf.size();
-        const int T_src = (int)(total_floats / frame_stride); // typically 1 for single image
-        const int T_req = temporal_patch_size;                // usually 2 for Qwen2-VL
+        const int T_src = (int)(img_f32.buf.size() / frame_stride);
 
-        // Grid in merged space
-        const int grid_h = H / (patch_size * merge_size);
-        const int grid_w = W / (patch_size * merge_size);
+        const int grid_h = H / patch_size;
+        const int grid_w = W / patch_size;
 
-        out_patch_count   = (size_t)grid_h * grid_w * merge_size * merge_size;
-        out_patch_vec_len = (size_t)C * T_req * patch_size * patch_size;
+        out_patch_count   = (size_t)grid_h * grid_w;
+        out_patch_vec_len = (size_t)C * temporal_patch_size * patch_size * patch_size;
 
-        printf("PATCHIFY: Image size: W=%d, H=%d, C=%d\n", W, H, C);
-        printf("PATCHIFY: patch_size=%d, merge_size=%d, temporal_patch_size=%d\n",
-            patch_size, merge_size, T_req);
-        printf("PATCHIFY: frames_in_buffer (T_src)=%d, will_effectively_use=%d (Torch repeats last if needed)\n",
-            T_src, std::max(T_src, T_req));
-        printf("PATCHIFY: grid_h=%d, grid_w=%d => total patches=%zu\n",
-            grid_h, grid_w, out_patch_count);
-        printf("PATCHIFY: vector length per patch = %zu floats\n", out_patch_vec_len);
-
-        // First-row probe (channel 0, y=0)
-        if (total_floats >= (size_t)W * C) {
-            printf("PATCHIFY: First 10 floats of channel 0, row 0: ");
-            for (int i = 0; i < std::min(W, 10); ++i) {
-                size_t idx = 0 * frame_stride + 0 * W * C + i * C + 0;
-                printf("%.6f ", img_f32.buf[idx]);
-            }
-            printf("\n");
-        }
-
-        // Allocate output
-        std::vector<float> patches;
-        patches.resize(out_patch_count * out_patch_vec_len);
-        float *dst = patches.data();
+        std::vector<float> patches(out_patch_count * out_patch_vec_len);
         size_t write = 0;
 
-        // Traverse patches in grid order
-        for (int gh = 0; gh < grid_h; ++gh) {
-            for (int gw = 0; gw < grid_w; ++gw) {
-
-                // merge_size splits inside each coarse grid cell
+        for (int gh = 0; gh < grid_h / merge_size; ++gh) {
+            for (int gw = 0; gw < grid_w / merge_size; ++gw) {
                 for (int ms_h = 0; ms_h < merge_size; ++ms_h) {
                     for (int ms_w = 0; ms_w < merge_size; ++ms_w) {
-
-                        // Per-patch vector order: channel → temporal → ph → pw (pw fastest)
                         for (int c = 0; c < C; ++c) {
-                            for (int t = 0; t < T_req; ++t) {
-                                const int t_eff = (T_src == 0) ? 0 : std::min(t, T_src - 1);
+                            for (int ph = 0; ph < patch_size; ++ph) {
+                                int y = (gh * merge_size + ms_h) * patch_size + ph;
+                                for (int pw = 0; pw < patch_size; ++pw) {
+                                    int x = (gw * merge_size + ms_w) * patch_size + pw;
+                                    size_t idx =
+                                        (size_t)0 * frame_stride + // single frame
+                                        (size_t)y * W * C +
+                                        (size_t)x * C +
+                                        (size_t)c;
 
-                                for (int ph = 0; ph < patch_size; ++ph) {
-                                    const int y = gh * (patch_size * merge_size) + ms_h * patch_size + ph;
-
-                                    for (int pw = 0; pw < patch_size; ++pw) {
-                                        const int x = gw * (patch_size * merge_size) + ms_w * patch_size + pw;
-
-                                        size_t idx = (size_t)t_eff * frame_stride +
-                                                    (size_t)y * W * C +
-                                                    (size_t)x * C +
-                                                    (size_t)c;
-
-                                        dst[write++] = img_f32.buf[idx];
-                                    }
+                                    float val = img_f32.buf[idx];
+                                    // write twice for the 2 temporal slots
+                                    patches[write++] = val;
+                                    patches[write++] = val;
                                 }
                             }
                         }
@@ -3343,16 +3404,8 @@ struct image_manipulation {
             }
         }
 
-        // Preview first patch
-        printf("PATCHIFY: First patch, first 20 floats: ");
-        for (int i = 0; i < std::min<int>(20, out_patch_vec_len); ++i) {
-            printf("%.6f ", patches[i]);
-        }
-        printf("...\n");
-
         return patches;
     }
-
 
 private:
     static inline int clip(int x, int lower, int upper) {

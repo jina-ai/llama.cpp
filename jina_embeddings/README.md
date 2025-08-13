@@ -57,7 +57,7 @@ python infer_cosine.py   \
 python jina_embeddings/infer_cosine.py   \
     --llama-bin /Users/andrei/Documents/GitHub/jina-llama.cpp/build/bin/llama-server   \
     --model /Users/andrei/Documents/gguf/jev4-bf16.gguf   \
-    --mmproj /Users/andrei/Documents/gguf/mmproj-jev4-bf16.gguf   \
+    --mmproj /Users/andrei/Documents/gguf/mmproj-jev4-bf16-fixed.gguf  \
     --input /Users/andrei/Documents/GitHub/jina-llama.cpp/jina_embeddings/assets/test_data.txt  \
     --output /Users/andrei/Documents/GitHub/jina-llama.cpp/jina_embeddings/temp/jev4_mmtd.md   \
     --query-prefix "Query: "   \
@@ -80,6 +80,10 @@ python convert_hf_to_gguf.py /Users/andrei/Downloads/jev4-retrieval \
     --outtype bf16 \
     --outfile /Users/andrei/Documents/gguf/jev4-bf16.gguf \
     --verbose
+
+python jina_embeddings/utils/export_torch_weights.py /Users/andrei/Downloads/jev4-retrieval /Users/andrei/Documents/gguf
+
+python jina_embeddings/utils/patch_gguf.py
 ```
 
 # Quantization

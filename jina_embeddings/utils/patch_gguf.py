@@ -1,78 +1,75 @@
-#!/usr/bin/env python3
 import os
 import numpy as np # type: ignore
 import gguf
 
-# Map GGUF dtype IDs to NumPy dtypes
+# Type mapping from gguf.tensor_type to numpy dtype
 GGUF_DTYPE_MAP = {
-    0: np.float32,
-    1: np.float16
+    0: np.float32,  # assuming these codes correspond
+    1: np.float16,
+    # extend if needed...
 }
 
-def load_weights_from_bin(tensor, bin_path):
-    """Load replacement weights from a .bin file, matching GGUF tensor dtype."""
+def load_weights_for_tensor(bin_path: str, tensor) -> np.ndarray:
     target_dtype = GGUF_DTYPE_MAP.get(tensor.tensor_type)
     if target_dtype is None:
-        raise ValueError(f"❌ Unsupported tensor type {tensor.tensor_type} for {tensor.name}")
+        raise ValueError(f"Unsupported tensor_type {tensor.tensor_type} for {tensor.name}")
+    sz = os.path.getsize(bin_path)
+    expected = tensor.n_bytes
 
-    file_size = os.path.getsize(bin_path)
-    expected_size = tensor.n_bytes
-
-    # Handle case where bin is float32 but GGUF expects float16
-    if file_size == expected_size * 2 and target_dtype == np.float16:
-        print(f"↪️ Converting {tensor.name} from float32 to float16")
-        data = np.fromfile(bin_path, dtype=np.float32).astype(np.float16)
+    if target_dtype == np.float16 and sz == expected * 2:
+        arr = np.fromfile(bin_path, dtype=np.float32).astype(np.float16)
     else:
-        data = np.fromfile(bin_path, dtype=target_dtype)
+        arr = np.fromfile(bin_path, dtype=target_dtype)
 
-    if data.nbytes != expected_size:
-        raise ValueError(f"❌ Size mismatch for {tensor.name}: got {data.nbytes}, expected {expected_size}")
+    if arr.nbytes != expected:
+        raise ValueError(f"Size mismatch for {tensor.name}: {arr.nbytes} != {expected}")
+    return arr
 
-    print(f"📦 Loaded {tensor.name}: shape {data.shape}, bytes {data.nbytes}")
-    return data
+def patch_tensor(gguf_path: str, tensor, new_data: np.ndarray):
+    with open(gguf_path, "r+b") as f:
+        f.seek(tensor.data_offset)
+        old_bytes = f.read(tensor.n_bytes)
+        old_arr = np.frombuffer(old_bytes, dtype=new_data.dtype)
 
-def patch_tensor(output_gguf, tensor_name, bin_path):
-    """Patch a single tensor in a GGUF file with data from a .bin file."""
-    reader = gguf.GGUFReader(output_gguf)
-    target_tensor = None
-    for t in reader.tensors:
-        if t.name == tensor_name:
-            target_tensor = t
-            break
+        diff = old_arr - new_data
+        mae = np.abs(diff).mean()
+        mse = (diff ** 2).mean()
+        max_abs = np.abs(diff).max()
+        mean_signed = diff.mean()
 
-    if target_tensor is None:
-        raise ValueError(f"❌ Tensor {tensor_name} not found in GGUF file")
+        print(f"🔍 {tensor.name}: MAE={mae}, MSE={mse}, MaxAbs={max_abs}, MeanSigned={mean_signed}")
 
-    data = load_weights_from_bin(target_tensor, bin_path)
+        f.seek(tensor.data_offset)
+        f.write(new_data.tobytes())
 
-    with open(output_gguf, 'r+b') as f:
-        f.seek(target_tensor.data_offset)
-        f.write(data.tobytes())
-        print(f"✅ Replaced {tensor_name} at offset {target_tensor.data_offset}")
-
-def patch_multiple_tensors(input_gguf, output_gguf, patch_list):
-    """
-    Patch multiple tensors in one go.
-    patch_list = [(tensor_name, bin_path), ...]
-    """
-    print(f"📄 Copying GGUF from {input_gguf} to {output_gguf}")
-    with open(input_gguf, 'rb') as src, open(output_gguf, 'wb') as dst:
+def patch_multiple(input_gguf: str, output_gguf: str, patch_list):
+    print(f"Copying GGUF from {input_gguf} to {output_gguf}")
+    with open(input_gguf, "rb") as src, open(output_gguf, "wb") as dst:
         dst.write(src.read())
 
-    for tensor_name, bin_path in patch_list:
-        patch_tensor(output_gguf, tensor_name, bin_path)
+    reader = gguf.GGUFReader(output_gguf)
+    name_to_tensor = {t.name: t for t in reader.tensors}
 
-    print(f"🎉 Finished patching {len(patch_list)} tensors.")
+    for name, bin_path in patch_list:
+        if name not in name_to_tensor:
+            raise ValueError(f"Tensor '{name}' not found")
+        print(f"Patching {name}")
+        t = name_to_tensor[name]
+        new_data = load_weights_for_tensor(bin_path, t)
+        patch_tensor(output_gguf, t, new_data)
+
+    gguf.GGUFReader(output_gguf)  # quick validity check
+    print("✅ Patching complete, GGUF loads successfully")
 
 if __name__ == "__main__":
     # Example usage
-    input_gguf  = "/path/to/original.gguf"
-    output_gguf = "/path/to/patched.gguf"
+    input_gguf  = "/Users/andrei/Documents/gguf/mmproj-jev4-bf16.gguf"
+    output_gguf = "/Users/andrei/Documents/gguf/mmproj-jev4-bf16-fixed.gguf"
 
     patch_list = [
-        ("v.patch_embd.weight_flat", "/path/to/weight_flat.bin"),
-        ("v.patch_embd.weight.0",    "/path/to/conv2d_w0.bin"),
-        ("v.patch_embd.weight.1",    "/path/to/conv2d_w1.bin")
+        ("v.patch_embd.weight_flat", "/Users/andrei/Documents/gguf/q25vl_patch_flat.bin"),
+        # ("v.patch_embd.weight",    "/Users/andrei/Documents/gguf/q25vl_patch_t0.bin"),
+        # ("v.patch_embd.weight.1",    "/Users/andrei/Documents/gguf/q25vl_patch_t1.bin")
     ]
 
-    patch_multiple_tensors(input_gguf, output_gguf, patch_list)
+    patch_multiple(input_gguf, output_gguf, patch_list)
