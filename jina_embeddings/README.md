@@ -12,9 +12,9 @@ cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-9 -DLLAMA_
 cmake --build build --config Release
 ```
 
-Compile on Mac (cpu only).
+Compile on Mac (gpu).
 ```bash
-cmake -B build -DGGML_METAL=OFF
+cmake -B build -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=Apple -DGGML_METAL=ON
 cmake --build build --config Release -j
 ```
 

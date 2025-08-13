@@ -84,7 +84,8 @@ class LlamaCppServerEmbeddingModel:
             '--host', self.host,
             '--pooling', 'none',
             '--ctx-size', str(self.ctx_size),
-            '--ubatch-size', str(self.ubatch_size)
+            '--ubatch-size', str(self.ubatch_size),
+            '--no-warmup'
         ]
         
         self._log(f"Starting llama-server with: {' '.join(cmd)}")

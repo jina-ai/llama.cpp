@@ -3060,9 +3060,11 @@ class Qwen2VLVisionModel(MmprojModel):
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         del bid, name, n_dims  # unused
         if ".patch_embd." in new_name:
-            return gguf.GGMLQuantizationType.F16
+            # return gguf.GGMLQuantizationType.F16
+            return gguf.GGMLQuantizationType.F32
         if ".position_embd." in new_name:
             return gguf.GGMLQuantizationType.F32
+        # NOTE: forcing to F32 required in order to be able to patch weights after export
         # if "mm.0.w" in new_name or "mm.2.w" in new_name:
         #     # mm.0.w and mm.1.w are the weights of the final linear layers
         #     # in Qwen2_5_VL, they are quantized to F32
@@ -3092,12 +3094,27 @@ class Qwen2VLVisionModel(MmprojModel):
             elif 'patch_embed.proj.weight' in name:
                 # split Conv3D into Conv2Ds
                 c1, c2, kt, kh, kw = data_torch.shape
-                del c1, c2, kh, kw  # unused
+                # del c1, c2, kh, kw  # unused
                 assert kt == 2, "Current implmentation only support temporal_patch_size of 2"
                 return [
-                    (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight"  , data_torch[:, :, 0, ...]),
-                    (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight.1", data_torch[:, :, 1, ...]),
+                    # Original 2D-sliced export
+                    (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight",
+                    data_torch[:, :, 0, ...]),
+                    (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight.1",
+                    data_torch[:, :, 1, ...]),
+                    # Flat weight for matmul path
+                    (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight_flat",
+                    data_torch.view(c1, -1).contiguous())
                 ]
+            
+            # NOTE: there seems to be no bias, skip that
+            # elif 'patch_embed.proj.bias' in name:
+            #     # Export flat bias directly
+            #     return [
+            #         (self.map_tensor_name(name), data_torch),
+            #         (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".bias_flat",
+            #         data_torch)
+            #     ]
             
             else:
 
