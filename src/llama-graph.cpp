@@ -146,7 +146,6 @@ bool llm_graph_input_out_ids::can_reuse(const llm_graph_params & params) {
 void llm_graph_input_mean::set_input(const llama_ubatch * ubatch) {
     if (cparams.embeddings && cparams.pooling_type == LLAMA_POOLING_TYPE_MEAN) {
         const int64_t n_tokens     = ubatch->n_tokens;
-        const int64_t n_seq_tokens = ubatch->n_seq_tokens;
         const int64_t n_seqs_unq   = ubatch->n_seqs_unq;
 
         GGML_ASSERT(mean);
@@ -155,32 +154,36 @@ void llm_graph_input_mean::set_input(const llama_ubatch * ubatch) {
         float * data = (float *) mean->data;
         memset(mean->data, 0, n_tokens*n_seqs_unq*ggml_element_size(mean));
 
-        std::vector<uint64_t> sums(n_seqs_unq, 0);
-        for (int i = 0; i < n_tokens; i += n_seq_tokens) {
+        // @Han For mean pooling, we need to ensure that all tokens in a sequence are processed together
+        // The current implementation assumes n_seq_tokens is constant, but this is not true when
+        // sequences are split across multiple ubatches. We need to fix this.
+
+        // @Han Calculate the actual number of tokens per sequence in this ubatch
+        std::vector<uint64_t> actual_tokens_per_seq(n_seqs_unq, 0);
+
+        for (int i = 0; i < n_tokens; ++i) {
             for (int s = 0; s < ubatch->n_seq_id[i]; ++s) {
                 const llama_seq_id seq_id  = ubatch->seq_id[i][s];
                 const int32_t      seq_idx = ubatch->seq_idx[seq_id];
 
-                sums[seq_idx] += ubatch->n_seq_tokens;
+                actual_tokens_per_seq[seq_idx]++;
             }
         }
 
         std::vector<float> div(n_seqs_unq, 0.0f);
         for (int s = 0; s < n_seqs_unq; ++s) {
-            const uint64_t sum = sums[s];
-            if (sum > 0) {
-                div[s] = 1.0f/float(sum);
+            const uint64_t actual_tokens = actual_tokens_per_seq[s];
+            if (actual_tokens > 0) {
+                div[s] = 1.0f/float(actual_tokens);
             }
         }
 
-        for (int i = 0; i < n_tokens; i += n_seq_tokens) {
+        // @Han Apply the mean pooling weights
+        for (int i = 0; i < n_tokens; ++i) {
             for (int s = 0; s < ubatch->n_seq_id[i]; ++s) {
-                const llama_seq_id seq_id  = ubatch->seq_id[i][s];
-                const int32_t      seq_idx = ubatch->seq_idx[seq_id];
-
-                for (int j = 0; j < n_seq_tokens; ++j) {
-                    data[seq_idx*n_tokens + i + j] = div[seq_idx];
-                }
+                const llama_seq_id seq_id    = ubatch->seq_id[i][s];
+                const int32_t      seq_idx   = ubatch->seq_idx[seq_id];
+                data[seq_idx * n_tokens + i] = div[seq_idx];
             }
         }
     }

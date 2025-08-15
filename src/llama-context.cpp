@@ -11,6 +11,8 @@
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+#include <map>
+#include <vector>
 
 //
 // llama_context
@@ -971,6 +973,11 @@ int llama_context::decode(const llama_batch & batch_inp) {
     // TODO: this clear of the buffer can easily be forgotten - need something better
     embd_seq.clear();
 
+    // @Han For mean pooling, we need to accumulate embeddings across all ubatches
+    // since sequences can span multiple ubatches
+    std::map<llama_seq_id, std::vector<float>> embd_accumulator;
+    std::map<llama_seq_id, int32_t>            token_counts;
+
     bool did_optimize = false;
 
     // handle any pending defrags/shifts
@@ -1128,6 +1135,45 @@ int llama_context::decode(const llama_batch & batch_inp) {
                         }
                     } break;
                 case LLAMA_POOLING_TYPE_MEAN:
+                    {
+                        // @Han For mean pooling, we need to accumulate embeddings across all ubatches
+                        // since sequences can span multiple ubatches
+                        for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
+                            const llama_seq_id seq_id  = ubatch.seq_id_unq[s];
+                            const int32_t      seq_idx = ubatch.seq_idx[seq_id];
+
+                            // Get the embedding for this sequence in this ubatch
+                            std::vector<float> ubatch_embd(n_embd);
+                            ggml_backend_tensor_get_async(backend_embd,
+                                                          t_embd,
+                                                          ubatch_embd.data(),
+                                                          (n_embd * seq_idx) * sizeof(float),
+                                                          n_embd * sizeof(float));
+
+                            // Synchronize to get the data
+                            ggml_backend_synchronize(backend_embd);
+
+                            // Count tokens for this sequence in this ubatch
+                            int32_t ubatch_tokens = 0;
+                            for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+                                if (ubatch.seq_id[i][0] == seq_id) {
+                                    ubatch_tokens++;
+                                }
+                            }
+
+                            // Initialize accumulator if this is the first time we see this sequence
+                            if (embd_accumulator.find(seq_id) == embd_accumulator.end()) {
+                                embd_accumulator[seq_id] = std::vector<float>(n_embd, 0.0f);
+                                token_counts[seq_id]     = 0;
+                            }
+
+                            // Accumulate the weighted embedding (multiply by number of tokens)
+                            for (int64_t j = 0; j < n_embd; ++j) {
+                                embd_accumulator[seq_id][j] += ubatch_embd[j] * ubatch_tokens;
+                            }
+                            token_counts[seq_id] += ubatch_tokens;
+                        }
+                    } break;
                 case LLAMA_POOLING_TYPE_CLS:
                 case LLAMA_POOLING_TYPE_LAST:
                     {
@@ -1166,6 +1212,25 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
         n_outputs_prev += n_outputs;
     } while (mctx->next());
+
+    // @Han For mean pooling, compute the final mean across all accumulated embeddings
+    if (cparams.pooling_type == LLAMA_POOLING_TYPE_MEAN && !embd_accumulator.empty()) {
+        auto & embd_seq_out = embd_seq;
+
+        for (const auto & [seq_id, accumulated_embd] : embd_accumulator) {
+            const int32_t total_tokens = token_counts[seq_id];
+
+            if (total_tokens > 0) {
+                embd_seq_out[seq_id].resize(n_embd);
+
+                // Compute the mean by dividing by total tokens
+                for (int64_t j = 0; j < n_embd; ++j) {
+                    embd_seq_out[seq_id][j] = accumulated_embd[j] / total_tokens;
+                }
+
+            }
+        }
+    }
 
     // set to total number of outputs in the batch, for use in llama_get_logits_ith
     n_outputs = n_outputs_all;

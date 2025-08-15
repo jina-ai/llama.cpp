@@ -1,3 +1,4 @@
+// #include "../src/llama-cparams.h"
 #include "arg.h"
 #include "common.h"
 #include "log.h"
@@ -81,14 +82,21 @@ int main(int argc, char ** argv) {
 
     params.embedding = true;
 
+    // @Han somehow kv_unified change from time to time?
+    params.kv_unified = true;
+
     // utilize the full context
-    if (params.n_batch < params.n_ctx) {
-        LOG_WRN("%s: setting batch size to %d\n", __func__, params.n_ctx);
-        params.n_batch = params.n_ctx;
-    }
+    // if (params.n_batch < params.n_ctx) {
+    //     LOG_WRN("%s: setting batch size to %d\n", __func__, params.n_ctx);
+    //     params.n_batch = params.n_ctx;
+    // }
+
+    // @Han always utilize the full context
+    params.n_batch = params.n_ctx;
 
     // For non-causal models, batch size must be equal to ubatch size
-    params.n_ubatch = params.n_batch;
+    // @Han but jina-embeddings v4 is a causal model, so we can use ubatch
+    // params.n_ubatch = params.n_batch;
 
     llama_backend_init();
     llama_numa_init(params.numa);
@@ -173,10 +181,14 @@ int main(int argc, char ** argv) {
 
     // check if the last token is SEP/EOS
     // it should be automatically added by the tokenizer when 'tokenizer.ggml.add_eos_token' is set to 'true'
-    for (auto & inp : inputs) {
-        if (inp.empty() || (inp.back() != llama_vocab_sep(vocab) && inp.back() != llama_vocab_eos(vocab))) {
-            LOG_WRN("%s: last token in the prompt is not SEP or EOS\n", __func__);
-            LOG_WRN("%s: 'tokenizer.ggml.add_eos_token' should be set to 'true' in the GGUF header\n", __func__);
+    // @Han this seems unnecessary for mean pooling based embedding
+    // only check for pooling types that typically require EOS/SEP tokens (not mean pooling)
+    if (pooling_type != LLAMA_POOLING_TYPE_MEAN) {
+        for (auto & inp : inputs) {
+            if (inp.empty() || (inp.back() != llama_vocab_sep(vocab) && inp.back() != llama_vocab_eos(vocab))) {
+                LOG_WRN("%s: last token in the prompt is not SEP or EOS\n", __func__);
+                LOG_WRN("%s: 'tokenizer.ggml.add_eos_token' should be set to 'true' in the GGUF header\n", __func__);
+            }
         }
     }
 
@@ -190,11 +202,16 @@ int main(int argc, char ** argv) {
             }
             LOG("\n\n");
         }
+        // show number of prompts
+        LOG_INF("%s: number of prompts = %ld\n", __func__, prompts.size());
     }
 
     // initialize batch
     const int n_prompts = prompts.size();
+    // @Han will reuse this batch again and again
     struct llama_batch batch = llama_batch_init(n_batch, 0, 1);
+    // @Han show n_tokens in batch
+    LOG_INF("%s: n_tokens in batch = %d\n", __func__, batch.n_tokens);
 
     // count number of embeddings
     int n_embd_count = 0;
@@ -205,6 +222,7 @@ int main(int argc, char ** argv) {
     } else {
         n_embd_count = n_prompts;
     }
+    LOG_INF("%s: number of embeddings = %d\n", __func__, n_embd_count);
 
     // allocate output
     const int n_embd = llama_model_n_embd(model);
