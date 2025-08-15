@@ -45,6 +45,8 @@
 extern "C" {
 #endif
 
+using raw_buffer = std::vector<uint8_t>;
+
 enum mtmd_input_chunk_type {
     MTMD_INPUT_CHUNK_TYPE_TEXT,
     MTMD_INPUT_CHUNK_TYPE_IMAGE,
@@ -199,8 +201,8 @@ MTMD_API int32_t mtmd_tokenize(mtmd_context * ctx,
 MTMD_API int32_t mtmd_tokenize_prebuilt(mtmd_context * ctx,
                                         mtmd_input_chunks * output,
                                         const mtmd_input_text * text,
-                                        const mtmd_image_tokens ** prebuilt_imgs,
-                                        size_t n_prebuilt_imgs);
+                                        const std::vector<raw_buffer> & prebuilt_images,
+                                        const std::vector<std::array<uint32_t, 2>> & prebuilt_shapes);
 
 // returns 0 on success
 // TODO: deprecate
@@ -236,6 +238,7 @@ namespace mtmd {
 struct mtmd_context_deleter {
     void operator()(mtmd_context * val) { mtmd_free(val); }
 };
+
 using context_ptr = std::unique_ptr<mtmd_context, mtmd_context_deleter>;
 
 struct mtmd_bitmap_deleter {

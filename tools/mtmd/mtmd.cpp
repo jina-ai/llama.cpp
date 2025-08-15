@@ -362,7 +362,10 @@ void mtmd_free(mtmd_context * ctx) {
 struct mtmd_tokenizer {
     mtmd_context * ctx;
     std::vector<const mtmd_bitmap *> bitmaps;
-    std::vector<const mtmd_image_tokens *> prebuilt_images;
+
+    // @andrei added these for prebuilt patches
+    std::vector<raw_buffer> prebuilt_imgs;
+    std::vector<std::array<uint32_t, 2>> prebuilt_shapes;
 
     std::string input_text;
     bool add_special;
@@ -386,14 +389,14 @@ struct mtmd_tokenizer {
 
     mtmd_tokenizer(mtmd_context * ctx,
             const mtmd_input_text * text,
-            const mtmd_image_tokens ** prebuilt_imgs,
-            size_t n_prebuilt_imgs) : ctx(ctx), prebuilt_imgs(prebuilt_imgs, prebuilt_imgs + n_prebuilt_imgs) {
+            const std::vector<raw_buffer> & prebuilt_imgs,
+            const std::vector<std::array<uint32_t, 2>> & prebuilt_shapes)
+        : ctx(ctx), prebuilt_imgs(prebuilt_imgs), prebuilt_shapes(prebuilt_shapes) {
         add_special   = text->add_special;
         parse_special = text->parse_special;
         input_text    = text->text;
         vocab         = llama_model_get_vocab(ctx->text_model);
 
-        // convert image marker to media marker for compatibility
         string_replace_all(input_text, MTMD_DEFAULT_IMAGE_MARKER, ctx->media_marker);
     }
 
@@ -459,31 +462,64 @@ struct mtmd_tokenizer {
 
         // Split text into parts around the media marker
         std::vector<std::string> parts = split_text(input_text, ctx->media_marker);
-        size_t i_img = 0; // index for prebuilt images
+        size_t i_img = 0;
 
         for (auto & part : parts) {
             if (part == ctx->media_marker) {
-                // This is a marker → insert prebuilt image tokens
-                if (i_img >= prebuilt_imgs.size()) {
-                    LOG_ERR("%s: error: number of prebuilt image tokens (%zu) does not match number of markers (%zu)\n",
+                if (i_img >= prebuilt_imgs.size() || i_img >= prebuilt_shapes.size()) {
+                    LOG_ERR("%s: error: number of prebuilt images (%zu) does not match number of markers (%zu)\n",
                             __func__, prebuilt_imgs.size(), parts.size() - 1);
                     return 1;
                 }
 
-                const mtmd_image_tokens * img_tokens = prebuilt_imgs[i_img++];
+                const auto & buf   = prebuilt_imgs[i_img];
+                const auto & shape = prebuilt_shapes[i_img];
+                i_img++;
+
+                // Create mtmd_image_tokens
+                // auto toks = std::make_shared<mtmd_image_tokens>();
+                auto toks = std::make_unique<mtmd_image_tokens>();
+                toks->nx = shape[0]; // token-space width
+                toks->ny = shape[1]; // token-space height
+                toks->use_mrope_pos = false;
+
+                // TODO: do not hardcode patch size
+                // Pixel dimensions for clip_image_f32
+                // const int px_w = toks->nx * ctx->model.hparams.patch_size;
+                // const int px_h = toks->ny * ctx->model.hparams.patch_size;
+                const int px_w = toks->nx * 14;
+                const int px_h = toks->ny * 14;
+
+                // auto img_ptr = std::make_shared<clip_image_f32>();
+                // auto img_ptr = std::make_unique<clip_image_f32>();
+
+                auto img_ptr = std::unique_ptr<clip_image_f32, clip_image_f32_deleter>(
+                    new clip_image_f32(),
+                    clip_image_f32_deleter{}
+                );
+
+                img_ptr->nx = px_w;
+                img_ptr->ny = px_h;
+                img_ptr->is_precomputed = true;
+                img_ptr->buf.resize(buf.size() / sizeof(float));
+                std::memcpy(img_ptr->buf.data(), buf.data(), buf.size());
+
+                toks->batch_f32.entries.push_back(std::move(img_ptr));
+
+                // Optional ID for KV cache tracking
+                toks->id = fnv_hash(buf.data(), buf.size());
 
                 // Add begin token if configured
                 if (!ctx->img_beg.empty()) {
                     add_text(ctx->img_beg, true);
                 }
 
-                // Wrap into a chunk
-                mtmd_image_tokens_ptr img_ptr(new mtmd_image_tokens(*img_tokens)); // deep copy
+                // Add as a chunk
                 mtmd_input_chunk chunk{
                     MTMD_INPUT_CHUNK_TYPE_IMAGE,
                     {}, // no text tokens
-                    std::move(img_ptr),
-                    nullptr // no audio tokens
+                    std::move(toks),
+                    nullptr
                 };
                 cur.entries.emplace_back(std::move(chunk));
 
@@ -493,7 +529,7 @@ struct mtmd_tokenizer {
                 }
 
             } else {
-                // This is a text part
+                // Regular text part
                 add_text(part, parse_special);
             }
         }
@@ -518,7 +554,7 @@ struct mtmd_tokenizer {
 
         // Validate image count
         if (i_img != prebuilt_imgs.size()) {
-            LOG_ERR("%s: error: number of prebuilt image tokens (%zu) does not match number of markers (%zu)\n",
+            LOG_ERR("%s: error: number of prebuilt images (%zu) does not match number of markers (%zu)\n",
                     __func__, prebuilt_imgs.size(), parts.size() - 1);
             return 1;
         }
@@ -827,9 +863,9 @@ int32_t mtmd_tokenize(mtmd_context * ctx,
 int32_t mtmd_tokenize_prebuilt(mtmd_context * ctx,
                                mtmd_input_chunks * output,
                                const mtmd_input_text * text,
-                               const mtmd_image_tokens ** prebuilt_imgs,
-                               size_t n_prebuilt_imgs) {
-    mtmd_tokenizer tokenizer(ctx, text, prebuilt_imgs, n_prebuilt_imgs);
+                               const std::vector<raw_buffer> & prebuilt_images,
+                               const std::vector<std::array<uint32_t, 2>> & prebuilt_shapes) {
+    mtmd_tokenizer tokenizer(ctx, text, prebuilt_images, prebuilt_shapes);
     return tokenizer.tokenize_prebuilt(output);
 }
 

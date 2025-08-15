@@ -4722,6 +4722,7 @@ int main(int argc, char ** argv) {
         raw_buffer prebuilt_image;       // for patch embeddings (.bin float32)
         std::array<uint32_t, 2> prebuilt_shape = {0, 0}; // [nx, ny]
 
+
         // Decode normal image if present
         if (data.contains("image")) {
             std::string image_data = data.at("image");
@@ -4744,7 +4745,10 @@ int main(int argc, char ** argv) {
         }
 
         mtmd::bitmaps bitmaps;
-        std::vector<mtmd_image_tokens> prebuilt_imgs;
+        std::vector<std::unique_ptr<mtmd_image_tokens>> prebuilt_imgs;
+        std::vector<raw_buffer> prebuilt_images;
+        std::vector<std::array<uint32_t, 2>> prebuilt_shapes;
+        
         const bool has_mtmd = ctx_server.mctx != nullptr;
 
         if (!has_mtmd && (!file.empty() || !prebuilt_image.empty())) {
@@ -4767,29 +4771,10 @@ int main(int argc, char ** argv) {
         }
 
         // Prebuilt patch embeddings path
+        // TODO: instanciate them duh
         if (!prebuilt_image.empty()) {
-            // Construct mtmd_image_tokens directly
-            mtmd_image_tokens toks;
-            toks.nx = prebuilt_shape[0];
-            toks.ny = prebuilt_shape[1];
-            toks.use_mrope_pos = false;
-
-            // Load binary into clip_image_f32_batch
-            const size_t expected_size = (size_t)toks.n_tokens() * CLIP_IMAGE_PATCH_SIZE;
-            const size_t float_count   = prebuilt_image.size() / sizeof(float);
-
-            if (float_count != expected_size) {
-                throw std::runtime_error("Prebuilt image data size mismatch");
-            }
-
-            toks.batch_f32.data.resize(float_count);
-            std::memcpy(toks.batch_f32.data.data(), prebuilt_image.data(), prebuilt_image.size());
-
-            // optional ID for KV cache tracking
-            std::string hash = fnv_hash(prebuilt_image.data(), prebuilt_image.size());
-            toks.id = hash;
-
-            prebuilt_imgs.push_back(std::move(toks));
+            prebuilt_images.push_back(prebuilt_image);
+            prebuilt_shapes.push_back({ prebuilt_shape[0], prebuilt_shape[1] });
         }
 
         // Process prompt
@@ -4822,16 +4807,13 @@ int main(int argc, char ** argv) {
                 if (tokenized != 0) {
                     throw std::runtime_error("Failed to tokenize prompt (bitmap path)");
                 }
-            } else if (!prebuilt_imgs.empty()) {
-                // Call our new prebuilt path
-                std::vector<const mtmd_image_tokens *> prebuilt_ptrs;
-                for (auto & p : prebuilt_imgs) prebuilt_ptrs.push_back(&p);
+            } else if (!prebuilt_images.empty()) {
                 int32_t tokenized = mtmd_tokenize_prebuilt(
                     ctx_server.mctx,
                     chunks.ptr.get(),
                     &inp_txt,
-                    prebuilt_ptrs.data(),
-                    prebuilt_ptrs.size()
+                    prebuilt_images,
+                    prebuilt_shapes
                 );
                 if (tokenized != 0) {
                     throw std::runtime_error("Failed to tokenize prompt (prebuilt path)");

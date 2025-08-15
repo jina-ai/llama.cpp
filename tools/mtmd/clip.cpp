@@ -654,7 +654,6 @@ struct clip_graph {
             eps(hparams.eps),
             kq_scale(1.0f / sqrtf((float)d_head)) {
         struct ggml_init_params params = {
-            // @andrei added 1024 * 1024 for the cos/sin tensors
             /*.mem_size   =*/ ctx->buf_compute_meta.size(), 
             /*.mem_buffer =*/ ctx->buf_compute_meta.data(), 
             /*.no_alloc   =*/ true,
@@ -829,6 +828,9 @@ struct clip_graph {
         const int n_pos            = n_patches;
         const int num_position_ids = n_pos * 4; // m-rope requires 4 dim per position
 
+        const bool uses_precomputed_image = img.is_precomputed;
+        printf("build_qwen2vl: uses_precomputed_image = %s\n", uses_precomputed_image ? "true" : "false");
+
         norm_type norm_t = ctx->proj_type() == PROJECTOR_TYPE_QWEN25VL
             ? NORM_TYPE_RMS 
             : NORM_TYPE_NORMAL;
@@ -836,34 +838,46 @@ struct clip_graph {
         int mrope_sections[4] = {d_head/4, d_head/4, d_head/4, d_head/4};
 
         // Normal conv2d pipeline
-        ggml_tensor * inp_raw = build_inp_raw();
-        cb(inp_raw, "inp_raw", -1);
+        ggml_tensor * inp = nullptr;
 
-        ggml_tensor * inp_0 = ggml_conv_2d(ctx0, model.patch_embeddings_0, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
-        GGML_ASSERT(img.nx % (patch_size * 2) == 0);
-        GGML_ASSERT(img.ny % (patch_size * 2) == 0);
 
-        ggml_tensor * inp = inp_0;  
+        if (uses_precomputed_image) {
 
-        // second conv dimension
-        {
-            auto inp_1 = ggml_conv_2d(ctx0, model.patch_embeddings_1, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
-            inp = ggml_add(ctx0, inp, inp_1);
-            inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 1, 2, 0, 3));  // [w, h, c, b] -> [c, w, h, b]
-            
-            inp = ggml_reshape_4d(
-                ctx0, inp,
-                n_embd * 2, n_patches_x / 2, n_patches_y, batch_size);
+            ggml_tensor * inp_raw = build_inp_raw_precomputed();
+            cb(inp_raw, "inp_raw", -1);
+            inp = ggml_mul_mat(ctx0, model.patch_embeddings_flat, inp_raw);
 
-            inp = ggml_reshape_4d(
-                ctx0, inp,
-                n_embd * 2, n_patches_x / 2, 2, batch_size * (n_patches_y / 2));
+        } else {
 
-            inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 0, 2, 1, 3));
-            
-            inp = ggml_reshape_3d(
-                ctx0, inp,
-                n_embd, n_patches_x * n_patches_y, batch_size);
+            ggml_tensor * inp_raw = build_inp_raw();
+            cb(inp_raw, "inp_raw", -1);
+
+            ggml_tensor * inp_0 = ggml_conv_2d(ctx0, model.patch_embeddings_0, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
+            GGML_ASSERT(img.nx % (patch_size * 2) == 0);
+            GGML_ASSERT(img.ny % (patch_size * 2) == 0);
+
+            ggml_tensor * inp = inp_0;  
+
+            {
+                auto inp_1 = ggml_conv_2d(ctx0, model.patch_embeddings_1, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
+                inp = ggml_add(ctx0, inp, inp_1);
+                inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 1, 2, 0, 3));  // [w, h, c, b] -> [c, w, h, b]
+                
+                inp = ggml_reshape_4d(
+                    ctx0, inp,
+                    n_embd * 2, n_patches_x / 2, n_patches_y, batch_size);
+
+                inp = ggml_reshape_4d(
+                    ctx0, inp,
+                    n_embd * 2, n_patches_x / 2, 2, batch_size * (n_patches_y / 2));
+
+                inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 0, 2, 1, 3));
+                
+                inp = ggml_reshape_3d(
+                    ctx0, inp,
+                    n_embd, n_patches_x * n_patches_y, batch_size);
+            }
+
         }
 
         cb(inp, "patch_embeddings_final", -1);
@@ -1886,6 +1900,13 @@ private:
     ggml_tensor * build_inp_raw(int channels = 3) {
         ggml_tensor * inp_raw = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, img.nx, img.ny, channels);
         ggml_set_name(inp_raw, "inp_raw");
+        ggml_set_input(inp_raw);
+        return inp_raw;
+    }
+
+    ggml_tensor * build_inp_raw_precomputed() {
+        ggml_tensor * inp_raw = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, img.nx * img.ny, d_head);
+        ggml_set_name(inp_raw, "inp_raw_precomputed");
         ggml_set_input(inp_raw);
         return inp_raw;
     }
@@ -3601,12 +3622,6 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         auto new_size = image_manipulation::smart_resize(original_size, factor, min_pixels, max_pixels);
         image_manipulation::bicubic_resize(*img, resized, new_size.width, new_size.height);
 
-        // LOG AFTER RESIZE
-        for (int i = 0; i < std::min(50, (int)(resized.nx * resized.ny * 3)); i++) {
-            printf("%d ", (int)resized.buf[i]);
-        }
-        printf("\n");
-
         clip_image_f32_ptr img_f32(clip_image_f32_init());
         normalize_image_u8_to_f32(resized, *img_f32, params.image_mean, params.image_std);
 
@@ -4031,6 +4046,8 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     const auto & model   = ctx->model;
     const auto & hparams = model.hparams;
 
+    const bool uses_precomputed_img = imgs.entries[0]->is_precomputed;
+
     const int image_size_width  = imgs.entries[0]->nx;
     const int image_size_height = imgs.entries[0]->ny;
 
@@ -4067,54 +4084,59 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         ggml_backend_tensor_set(cur, values.data(), 0, ggml_nbytes(cur));
     };
 
-    // // set input pixel values
-    if (!imgs.is_audio) {
-        size_t nelem = 0;
-        for (const auto & img : imgs.entries) {
-            nelem += img->nx * img->ny * 3;
-        }
-        std::vector<float> inp_raw(nelem);
+    if (uses_precomputed_img) {
+        GGML_ASSERT(imgs.entries.size() == 1);
+        GGML_ASSERT(ctx->model.proj_type == PROJECTOR_TYPE_QWEN25VL);
+        // set_input_f32("inp_raw", imgs.entries[0]->buf);
+    } else {
+        if (!imgs.is_audio) {
+            size_t nelem = 0;
+            for (const auto & img : imgs.entries) {
+                nelem += img->nx * img->ny * 3;
+            }
+            std::vector<float> inp_raw(nelem);
 
-        // layout of data (note: the channel dim is unrolled to better visualize the layout):
-        //
-        // ┌──W──┐
-        // │     H │  channel = R
-        // ├─────┤ │
-        // │     H │  channel = G
-        // ├─────┤ │
-        // │     H │  channel = B
-        // └─────┘ │
-        //   ──────┘ x B
+            // layout of data (note: the channel dim is unrolled to better visualize the layout):
+            //
+            // ┌──W──┐
+            // │     H │  channel = R
+            // ├─────┤ │
+            // │     H │  channel = G
+            // ├─────┤ │
+            // │     H │  channel = B
+            // └─────┘ │
+            //   ──────┘ x B
 
-        for (size_t i = 0; i < imgs.entries.size(); i++) {
-            const int nx = imgs.entries[i]->nx;
-            const int ny = imgs.entries[i]->ny;
-            const int n = nx * ny;
+            for (size_t i = 0; i < imgs.entries.size(); i++) {
+                const int nx = imgs.entries[i]->nx;
+                const int ny = imgs.entries[i]->ny;
+                const int n = nx * ny;
 
-            for (int b = 0; b < batch_size; b++) {
-                float * batch_entry = inp_raw.data() + b * (3*n);
-                for (int y = 0; y < ny; y++) {
-                    for (int x = 0; x < nx; x++) {
-                        size_t base_src = 3*(y * nx + x); // idx of the first channel
-                        size_t base_dst =    y * nx + x;  // idx of the first channel
-                        batch_entry[      base_dst] = imgs.entries[b]->buf[base_src    ];
-                        batch_entry[1*n + base_dst] = imgs.entries[b]->buf[base_src + 1];
-                        batch_entry[2*n + base_dst] = imgs.entries[b]->buf[base_src + 2];
+                for (int b = 0; b < batch_size; b++) {
+                    float * batch_entry = inp_raw.data() + b * (3*n);
+                    for (int y = 0; y < ny; y++) {
+                        for (int x = 0; x < nx; x++) {
+                            size_t base_src = 3*(y * nx + x); // idx of the first channel
+                            size_t base_dst =    y * nx + x;  // idx of the first channel
+                            batch_entry[      base_dst] = imgs.entries[b]->buf[base_src    ];
+                            batch_entry[1*n + base_dst] = imgs.entries[b]->buf[base_src + 1];
+                            batch_entry[2*n + base_dst] = imgs.entries[b]->buf[base_src + 2];
+                        }
                     }
                 }
             }
-        }
-        set_input_f32("inp_raw", inp_raw);
+            set_input_f32("inp_raw", inp_raw);
 
-    } else {
-        // audio input
-        GGML_ASSERT(imgs.entries.size() == 1);
-        const auto & mel_inp = imgs.entries[0];
-        const int n_step = mel_inp->nx;
-        const int n_mel  = mel_inp->ny;
-        std::vector<float> inp_raw(n_step * n_mel);
-        std::memcpy(inp_raw.data(), mel_inp->buf.data(), n_step * n_mel * sizeof(float));
-        set_input_f32("inp_raw", inp_raw);
+        } else {
+            // audio input
+            GGML_ASSERT(imgs.entries.size() == 1);
+            const auto & mel_inp = imgs.entries[0];
+            const int n_step = mel_inp->nx;
+            const int n_mel  = mel_inp->ny;
+            std::vector<float> inp_raw(n_step * n_mel);
+            std::memcpy(inp_raw.data(), mel_inp->buf.data(), n_step * n_mel * sizeof(float));
+            set_input_f32("inp_raw", inp_raw);
+        }
     }
     
     // set input per projector
@@ -4281,14 +4303,14 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 set_input_i32("pos_w", pos_data);
             } break;
         case PROJECTOR_TYPE_GLM_EDGE:
-        {
-            // llava and other models
-            std::vector<int32_t> positions(n_pos);
-            for (int i = 0; i < n_pos; i++) {
-                positions[i] = i;
-            }
-            set_input_i32("positions", positions);
-        } break;
+            {
+                // llava and other models
+                std::vector<int32_t> positions(n_pos);
+                for (int i = 0; i < n_pos; i++) {
+                    positions[i] = i;
+                }
+                set_input_i32("positions", positions);
+            } break;
         case PROJECTOR_TYPE_MLP:
         case PROJECTOR_TYPE_MLP_NORM:
         case PROJECTOR_TYPE_LDP:
@@ -4391,16 +4413,16 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     }
 
     // print debug nodes
-    if (ctx->debug_graph) {
-        LOG_INF("\n\n---\n\n");
-        LOG_INF("\n\nDebug graph:\n\n");
-        for (ggml_tensor * t : ctx->debug_print_tensors) {
-            std::vector<uint8_t> data(ggml_nbytes(t));
-            ggml_backend_tensor_get(t, data.data(), 0, ggml_nbytes(t));
-            print_tensor_shape(t);
-            print_tensor_data(t, data.data(), 3);
-        }
-    }
+    // if (ctx->debug_graph) {
+    //     LOG_INF("\n\n---\n\n");
+    //     LOG_INF("\n\nDebug graph:\n\n");
+    //     for (ggml_tensor * t : ctx->debug_print_tensors) {
+    //         std::vector<uint8_t> data(ggml_nbytes(t));
+    //         ggml_backend_tensor_get(t, data.data(), 0, ggml_nbytes(t));
+    //         print_tensor_shape(t);
+    //         print_tensor_data(t, data.data(), 3);
+    //     }
+    // }
 
     // the last node is the embedding tensor
     ggml_tensor * embeddings = ggml_graph_node(gf, -1);
