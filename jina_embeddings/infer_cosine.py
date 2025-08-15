@@ -107,14 +107,25 @@ def save_cosine_similarity_matrix(raw_lines: List[str], embeddings: np.ndarray, 
 @click.option('--document-prefix', default='Passage: ', help='Prefix for [DOCUMENT] lines')
 @click.option('--image-prefix', default='<|im_start|>user\n<__image__>Describe the image.<|im_end|>\n', help='Prefix for [IMAGE] lines')
 @click.option('--logging/--no-logging', default=True, help='Enable/disable logging output')
-@click.option('--hf-tokenizer-name', help='HuggingFace tokenizer model name for text trimming')
+@click.option('--hf-model-name', help='HuggingFace model name for tokenizer and processor')
 @click.option('--max-text-length', default=512, help='Maximum text length in tokens (requires --hf-tokenizer-name)')
 def main(
-    llama_bin, model, mmproj, port, host, ngl, gpus,
-    input_path, output_path,
+    llama_bin, 
+    model, 
+    mmproj, 
+    port, 
+    host, 
+    ngl, 
+    gpus,
+    input_path,
+    output_path,
     normalize,
-    query_prefix, document_prefix, image_prefix,
-    logging, hf_tokenizer_name, max_text_length
+    query_prefix, 
+    document_prefix, 
+    image_prefix,
+    logging, 
+    hf_model_name, 
+    max_text_length
 ):
     # Load input lines
     with open(input_path, 'r', encoding='utf-8') as f:
@@ -133,7 +144,7 @@ def main(
         gpus=gpus,
         normalize=normalize,
         logging=logging,
-        hf_tokenizer_name=hf_tokenizer_name,
+        hf_model_name=hf_model_name,
         max_text_length=max_text_length
     )
 

@@ -4713,122 +4713,175 @@ int main(int argc, char ** argv) {
     const auto handle_embeddings_impl = [&ctx_server, &res_error, &res_ok](
         const httplib::Request & req, 
         httplib::Response & res,
-        const std::vector<raw_buffer> & files,
-        oaicompat_type oaicompat) -> void {
-    
+        oaicompat_type oaicompat
+    ) -> void {
         const json data = json::parse(req.body);
         const auto & prompt = oaicompat ? data.at("prompt") : data.at("content");
-        
-        // Process files
+
+        raw_buffer file;                 // for raw image (decoded bitmap)
+        raw_buffer prebuilt_image;       // for patch embeddings (.bin float32)
+        std::array<uint32_t, 2> prebuilt_shape = {0, 0}; // [nx, ny]
+
+        // Decode normal image if present
+        if (data.contains("image")) {
+            std::string image_data = data.at("image");
+            if (string_starts_with(image_data, "data:image/")) {
+                auto parts = string_split<std::string>(image_data, ',');
+                file = base64_decode(parts[1]);
+            }
+        }
+
+        // Decode prebuilt patch embeddings if present
+        if (data.contains("prebuilt_image")) {
+            std::string b64_bin = data.at("prebuilt_image");
+            prebuilt_image = base64_decode(b64_bin);
+
+            if (!data.contains("prebuilt_image_shape") || data.at("prebuilt_image_shape").size() != 2) {
+                throw std::runtime_error("Missing or invalid prebuilt_image_shape");
+            }
+            prebuilt_shape[0] = data.at("prebuilt_image_shape")[0].get<uint32_t>(); // nx
+            prebuilt_shape[1] = data.at("prebuilt_image_shape")[1].get<uint32_t>(); // ny
+        }
+
         mtmd::bitmaps bitmaps;
+        std::vector<mtmd_image_tokens> prebuilt_imgs;
         const bool has_mtmd = ctx_server.mctx != nullptr;
-        
-        if (!has_mtmd && !files.empty()) {
+
+        if (!has_mtmd && (!file.empty() || !prebuilt_image.empty())) {
             throw std::runtime_error("This server does not support multimodal");
         }
-        
-        for (size_t i = 0; i < files.size(); i++) {
-            
-            mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_buf(ctx_server.mctx, files[i].data(), files[i].size()));
 
+        // Normal bitmap path
+        if (!file.empty()) {
+            mtmd::bitmap bmp(
+                mtmd_helper_bitmap_init_from_buf(ctx_server.mctx, file.data(), file.size())
+            );
             if (!bmp.ptr) {
-                throw std::runtime_error("Failed to load image or audio file");
+                throw std::runtime_error("Failed to load image file");
             }
-            
-            // LOGGING: Raw bitmap data
-            printf("EMBEDDINGS: Raw bitmap loaded - width: %d, height: %d\n", 
-                bmp.nx(), bmp.ny());
-            
+
+            printf("EMBEDDINGS: Raw bitmap loaded - width: %d, height: %d\n", bmp.nx(), bmp.ny());
             std::string hash = fnv_hash(bmp.data(), bmp.n_bytes());
             bmp.set_id(hash.c_str());
             bitmaps.entries.push_back(std::move(bmp));
         }
 
+        // Prebuilt patch embeddings path
+        if (!prebuilt_image.empty()) {
+            // Construct mtmd_image_tokens directly
+            mtmd_image_tokens toks;
+            toks.nx = prebuilt_shape[0];
+            toks.ny = prebuilt_shape[1];
+            toks.use_mrope_pos = false;
+
+            // Load binary into clip_image_f32_batch
+            const size_t expected_size = (size_t)toks.n_tokens() * CLIP_IMAGE_PATCH_SIZE;
+            const size_t float_count   = prebuilt_image.size() / sizeof(float);
+
+            if (float_count != expected_size) {
+                throw std::runtime_error("Prebuilt image data size mismatch");
+            }
+
+            toks.batch_f32.data.resize(float_count);
+            std::memcpy(toks.batch_f32.data.data(), prebuilt_image.data(), prebuilt_image.size());
+
+            // optional ID for KV cache tracking
+            std::string hash = fnv_hash(prebuilt_image.data(), prebuilt_image.size());
+            toks.id = hash;
+
+            prebuilt_imgs.push_back(std::move(toks));
+        }
+
         // Process prompt
         std::vector<server_tokens> inputs;
-        
-        if (has_mtmd && !files.empty()) {
-            // multimodal tokenization
+
+        if (has_mtmd && (!bitmaps.entries.empty() || !prebuilt_imgs.empty())) {
             std::string prompt_str;
             if (prompt.is_string()) {
                 prompt_str = prompt.get<std::string>();
             } else {
                 prompt_str = prompt.dump();
             }
-            
-            
+
             mtmd_input_text inp_txt = {
                 prompt_str.c_str(),
                 /* add_special */   true,
                 /* parse_special */ true,
             };
             mtmd::input_chunks chunks(mtmd_input_chunks_init());
-            auto bitmaps_c_ptr = bitmaps.c_ptr();
-            
-            int32_t tokenized = mtmd_tokenize(ctx_server.mctx,
-                                            chunks.ptr.get(),
-                                            &inp_txt,
-                                            bitmaps_c_ptr.data(),
-                                            bitmaps_c_ptr.size());
-            
-            if (tokenized != 0) {
-                throw std::runtime_error("Failed to tokenize prompt");
+
+            if (!bitmaps.entries.empty()) {
+                auto bitmaps_c_ptr = bitmaps.c_ptr();
+                int32_t tokenized = mtmd_tokenize(
+                    ctx_server.mctx,
+                    chunks.ptr.get(),
+                    &inp_txt,
+                    bitmaps_c_ptr.data(),
+                    bitmaps_c_ptr.size()
+                );
+                if (tokenized != 0) {
+                    throw std::runtime_error("Failed to tokenize prompt (bitmap path)");
+                }
+            } else if (!prebuilt_imgs.empty()) {
+                // Call our new prebuilt path
+                std::vector<const mtmd_image_tokens *> prebuilt_ptrs;
+                for (auto & p : prebuilt_imgs) prebuilt_ptrs.push_back(&p);
+                int32_t tokenized = mtmd_tokenize_prebuilt(
+                    ctx_server.mctx,
+                    chunks.ptr.get(),
+                    &inp_txt,
+                    prebuilt_ptrs.data(),
+                    prebuilt_ptrs.size()
+                );
+                if (tokenized != 0) {
+                    throw std::runtime_error("Failed to tokenize prompt (prebuilt path)");
+                }
             }
 
-            server_tokens tmp(chunks, true);    
+            server_tokens tmp(chunks, true);
             inputs.push_back(std::move(tmp));
-            
+
         } else {
-            // non-multimodal version
-            
-            auto tokenized_prompts = tokenize_input_prompts(ctx_server.vocab, prompt, true, true);
-            
-            for (size_t prompt_idx = 0; prompt_idx < tokenized_prompts.size(); prompt_idx++) {
-                auto & p = tokenized_prompts[prompt_idx];        
+            // Non-multimodal
+            auto tokenized_prompts = tokenize_input_prompts(
+                ctx_server.vocab, prompt, true, true
+            );
+            for (auto & p : tokenized_prompts) {
                 auto tmp = server_tokens(p, ctx_server.mctx != nullptr);
                 inputs.push_back(std::move(tmp));
             }
         }
-        
+
         // Create embedding tasks
         std::vector<server_task> tasks;
         std::unordered_set<int> task_ids;
-        
         tasks.reserve(inputs.size());
+
         for (size_t i = 0; i < inputs.size(); i++) {
-            server_task task = server_task(SERVER_TASK_TYPE_EMBEDDING);
-            
+            server_task task(SERVER_TASK_TYPE_EMBEDDING);
             task.id    = ctx_server.queue_tasks.get_new_id();
             task.index = i;
-            
-            task.prompt_tokens    = std::move(inputs[i]);
-            task.params           = server_task::params_from_json_cmpl(
-                    ctx_server.ctx,
-                    ctx_server.params_base,
-                    data);
+            task.prompt_tokens = std::move(inputs[i]);
+            task.params        = server_task::params_from_json_cmpl(
+                ctx_server.ctx,
+                ctx_server.params_base,
+                data
+            );
             task.id_selected_slot = json_value(data, "id_slot", -1);
-            
-            // OAI-compat
             task.params.oaicompat = oaicompat;
-            
             tasks.push_back(std::move(task));
         }
-        
+
         task_ids = server_task::get_list_id(tasks);
         ctx_server.queue_results.add_waiting_tasks(tasks);
         ctx_server.queue_tasks.post(std::move(tasks));
-        
-        // Wait for results
+
         ctx_server.receive_multi_results(task_ids, [&](std::vector<server_task_result_ptr> & results) {
             if (results.size() == 1) {
-                // single result
                 res_ok(res, results[0]->to_json());
             } else {
-                // multiple results (multitask)
                 json arr = json::array();
-                for (auto & res : results) {
-                    arr.push_back(res->to_json());
-                }
+                for (auto & r : results) arr.push_back(r->to_json());
                 res_ok(res, arr);
             }
         }, [&](const json & error_data) {
@@ -4841,27 +4894,11 @@ int main(int argc, char ** argv) {
     };
 
     const auto handle_embeddings = [&handle_embeddings_impl](const httplib::Request & req, httplib::Response & res) {
-        std::vector<raw_buffer> files;
-        
-        // Parse the request body here to extract images
-        const json body = json::parse(req.body);
-        
-        // Handle simple image field for non-OAI endpoint
-        if (body.contains("image")) {
-            std::string image_data = body.at("image");
-            if (string_starts_with(image_data, "data:image/")) {
-                auto parts = string_split<std::string>(image_data, ',');
-                auto decoded_data = base64_decode(parts[1]);
-                files.push_back(decoded_data);
-            }
-        }
-        
-        handle_embeddings_impl(req, res, files, OAICOMPAT_TYPE_NONE);
+        handle_embeddings_impl(req, res, OAICOMPAT_TYPE_NONE);
     };
 
     const auto handle_embeddings_oai = [&handle_embeddings_impl](const httplib::Request & req, httplib::Response & res) {
-        std::vector<raw_buffer> files; // dummy files
-        handle_embeddings_impl(req, res, files, OAICOMPAT_TYPE_EMBEDDING);
+        handle_embeddings_impl(req, res, OAICOMPAT_TYPE_EMBEDDING);
     };
 
     const auto handle_rerank = [&ctx_server, &res_error, &res_ok](const httplib::Request & req, httplib::Response & res) {

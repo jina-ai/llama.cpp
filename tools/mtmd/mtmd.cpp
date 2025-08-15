@@ -362,6 +362,7 @@ void mtmd_free(mtmd_context * ctx) {
 struct mtmd_tokenizer {
     mtmd_context * ctx;
     std::vector<const mtmd_bitmap *> bitmaps;
+    std::vector<const mtmd_image_tokens *> prebuilt_images;
 
     std::string input_text;
     bool add_special;
@@ -380,6 +381,19 @@ struct mtmd_tokenizer {
         vocab         = llama_model_get_vocab(ctx->text_model);
 
         // for compatibility, we convert image marker to media marker
+        string_replace_all(input_text, MTMD_DEFAULT_IMAGE_MARKER, ctx->media_marker);
+    }
+
+    mtmd_tokenizer(mtmd_context * ctx,
+            const mtmd_input_text * text,
+            const mtmd_image_tokens ** prebuilt_imgs,
+            size_t n_prebuilt_imgs) : ctx(ctx), prebuilt_imgs(prebuilt_imgs, prebuilt_imgs + n_prebuilt_imgs) {
+        add_special   = text->add_special;
+        parse_special = text->parse_special;
+        input_text    = text->text;
+        vocab         = llama_model_get_vocab(ctx->text_model);
+
+        // convert image marker to media marker for compatibility
         string_replace_all(input_text, MTMD_DEFAULT_IMAGE_MARKER, ctx->media_marker);
     }
 
@@ -437,6 +451,79 @@ struct mtmd_tokenizer {
 
         *output = std::move(cur);
 
+        return 0;
+    }
+
+    int32_t tokenize_prebuilt(mtmd_input_chunks * output) {
+        cur.entries.clear();
+
+        // Split text into parts around the media marker
+        std::vector<std::string> parts = split_text(input_text, ctx->media_marker);
+        size_t i_img = 0; // index for prebuilt images
+
+        for (auto & part : parts) {
+            if (part == ctx->media_marker) {
+                // This is a marker → insert prebuilt image tokens
+                if (i_img >= prebuilt_imgs.size()) {
+                    LOG_ERR("%s: error: number of prebuilt image tokens (%zu) does not match number of markers (%zu)\n",
+                            __func__, prebuilt_imgs.size(), parts.size() - 1);
+                    return 1;
+                }
+
+                const mtmd_image_tokens * img_tokens = prebuilt_imgs[i_img++];
+
+                // Add begin token if configured
+                if (!ctx->img_beg.empty()) {
+                    add_text(ctx->img_beg, true);
+                }
+
+                // Wrap into a chunk
+                mtmd_image_tokens_ptr img_ptr(new mtmd_image_tokens(*img_tokens)); // deep copy
+                mtmd_input_chunk chunk{
+                    MTMD_INPUT_CHUNK_TYPE_IMAGE,
+                    {}, // no text tokens
+                    std::move(img_ptr),
+                    nullptr // no audio tokens
+                };
+                cur.entries.emplace_back(std::move(chunk));
+
+                // Add end token if configured
+                if (!ctx->img_end.empty()) {
+                    add_text(ctx->img_end, true);
+                }
+
+            } else {
+                // This is a text part
+                add_text(part, parse_special);
+            }
+        }
+
+        // Add BOS/EOS if needed
+        if (add_special && llama_vocab_get_add_bos(vocab)) {
+            if (!cur.entries.empty() && cur.entries[0].type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
+                cur.entries[0].tokens_text.insert(cur.entries[0].tokens_text.begin(), llama_vocab_bos(vocab));
+            } else {
+                mtmd_input_chunk bos_chunk{
+                    MTMD_INPUT_CHUNK_TYPE_TEXT,
+                    { llama_vocab_bos(vocab) },
+                    nullptr,
+                    nullptr
+                };
+                cur.entries.insert(cur.entries.begin(), std::move(bos_chunk));
+            }
+        }
+        if (add_special && llama_vocab_get_add_eos(vocab)) {
+            add_text({ llama_vocab_eos(vocab) });
+        }
+
+        // Validate image count
+        if (i_img != prebuilt_imgs.size()) {
+            LOG_ERR("%s: error: number of prebuilt image tokens (%zu) does not match number of markers (%zu)\n",
+                    __func__, prebuilt_imgs.size(), parts.size() - 1);
+            return 1;
+        }
+
+        *output = std::move(cur);
         return 0;
     }
 
@@ -735,6 +822,15 @@ int32_t mtmd_tokenize(mtmd_context * ctx,
             size_t n_bitmaps) {
     mtmd_tokenizer tokenizer(ctx, text, bitmaps, n_bitmaps);
     return tokenizer.tokenize(output);
+}
+
+int32_t mtmd_tokenize_prebuilt(mtmd_context * ctx,
+                               mtmd_input_chunks * output,
+                               const mtmd_input_text * text,
+                               const mtmd_image_tokens ** prebuilt_imgs,
+                               size_t n_prebuilt_imgs) {
+    mtmd_tokenizer tokenizer(ctx, text, prebuilt_imgs, n_prebuilt_imgs);
+    return tokenizer.tokenize_prebuilt(output);
 }
 
 int32_t mtmd_encode_chunk(mtmd_context * ctx, const mtmd_input_chunk * chunk) {

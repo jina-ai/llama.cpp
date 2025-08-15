@@ -4,14 +4,14 @@ import os
 import signal
 import subprocess
 import time
-from typing import List, Optional, Union
+from typing import List, Optional, Tuple, Union
 
 import numpy as np # type: ignore
 import requests # type: ignore
 from PIL import Image # type: ignore
 from typing_extensions import TypedDict # type: ignore
 from tqdm import tqdm # type: ignore
-from transformers import AutoTokenizer # type: ignore
+from transformers import AutoProcessor, AutoTokenizer # type: ignore
 
 
 class EmbeddingRequestItem(TypedDict):
@@ -33,7 +33,7 @@ class LlamaCppServerEmbeddingModel:
         ubatch_size: int = 4096,
         normalize: bool = False, 
         logging: bool = True,
-        hf_tokenizer_name: Optional[str] = None,
+        hf_model_name: Optional[str] = None,
         max_text_length: int = 512
     ) -> None:
         self.llama_bin = llama_bin
@@ -47,7 +47,7 @@ class LlamaCppServerEmbeddingModel:
         self.ubatch_size = ubatch_size
         self.normalize = normalize
         self.logging = logging
-        self.hf_tokenizer_name = hf_tokenizer_name
+        self.hf_model_name = hf_model_name
         self.max_text_length = max_text_length
         self.server_process = None
         self.hf_tokenizer = None
@@ -56,10 +56,11 @@ class LlamaCppServerEmbeddingModel:
         self.server_url = f"http://{host}:{port}"
         
         # Load tokenizer if specified
-        if self.hf_tokenizer_name is not None:
-            self._log(f"Loading HuggingFace tokenizer: {self.hf_tokenizer_name}")
-            self.hf_tokenizer = AutoTokenizer.from_pretrained(self.hf_tokenizer_name, use_fast=True)
-        
+        if self.hf_model_name is not None:
+            self._log(f"Loading HuggingFace processor and tokenizer for: {self.hf_model_name}")
+            self.hf_processor = AutoProcessor.from_pretrained(self.hf_model_name)
+            self.hf_tokenizer = AutoTokenizer.from_pretrained(self.hf_model_name, use_fast=True)
+
         # Start server
         self._start_server()
         self._wait_for_server()
@@ -92,9 +93,9 @@ class LlamaCppServerEmbeddingModel:
         self.server_process = subprocess.Popen(cmd, env=env)
 
     def _wait_for_server(self, max_wait_time: int = 300, check_interval: int = 2) -> None:
-        """Wait for the server to be ready"""
+        """Wait for the server to be ready via the /props endpoint."""
         self._log("Waiting for server to start...")
-        test_payload = {"content": "test"}
+        props_url = f"{self.server_url}/props"
 
         start_time = time.time()
         while True:
@@ -102,13 +103,15 @@ class LlamaCppServerEmbeddingModel:
             if elapsed > max_wait_time:
                 raise TimeoutError(f"Server did not become ready within {max_wait_time} seconds")
             try:
-                r = requests.post(f"{self.server_url}/embedding", json=test_payload, timeout=10)
-                assert r.status_code == 200, f"Server not ready: {r.status_code}"
-                self._log("✅ Server is ready!")
-                break
-            except (requests.exceptions.RequestException, AssertionError):
-                self._log(f"⏳ Waiting for server to start... ({elapsed:.1f}s elapsed)")
-                time.sleep(check_interval)
+                r = requests.get(props_url, timeout=10)
+                if r.status_code == 200:
+                    self._log("✅ Server is ready! (props endpoint responded)")
+                    break
+                else:
+                    self._log(f"⚠️ /props returned {r.status_code}, still waiting... ({elapsed:.1f}s elapsed)")
+            except requests.exceptions.RequestException as e:
+                self._log(f"⏳ Waiting for server to start... ({elapsed:.1f}s elapsed) Error: {e}")
+            time.sleep(check_interval)
 
     def shutdown_server(self) -> None:
         """Shutdown the llama-server process"""
@@ -161,6 +164,47 @@ class LlamaCppServerEmbeddingModel:
         
         return f"data:{mime_type};base64,{image_data}"
 
+    def _image_to_pixel_values(self, text: str, image: Union[str, Image.Image]) -> Tuple[str, List[int]]:
+        """
+        Convert image (path or PIL.Image) + text into Qwen2.5-VL pixel_values (patch embeddings),
+        serialize them to raw float32 binary, and return (base64 string, [nx, ny, embd]).
+        """
+        if isinstance(image, str):
+            pil_image = Image.open(image)
+        elif isinstance(image, Image.Image):
+            pil_image = image
+        else:
+            raise TypeError(f"Image must be str (file path) or PIL.Image, got {type(image)}")
+
+        if not hasattr(self, "hf_processor"):
+            raise RuntimeError("hf_processor is not initialized. Load it in __init__.")
+
+        # Processor generates patch embeddings
+        inputs = self.hf_processor(
+            text=[text],
+            images=[pil_image],
+            padding=True,
+            return_tensors="pt"
+        )
+
+        pixel_values = inputs["pixel_values"].detach().cpu().numpy().astype("float32")  # (1, num_patches, embd)
+        num_patches, embd = pixel_values.shape[1], pixel_values.shape[2]
+
+        # Get grid shape
+        if "patch_grid" in inputs:
+            nx, ny = inputs["patch_grid"][0]
+        else:
+            nx = int(round(num_patches ** 0.5))
+            ny = num_patches // nx
+            if nx * ny != num_patches:
+                raise ValueError(f"Cannot infer patch grid from {num_patches} patches")
+
+        # Convert to raw float32 binary
+        buf = pixel_values.tobytes(order="C")
+        b64_data = base64.b64encode(buf).decode("utf-8")
+
+        return b64_data, [nx, ny, embd]
+
     def _trim_text_with_tokenizer(self, text: str) -> str:
         """Trim text to max_text_length using the configured tokenizer"""
         if self.hf_tokenizer is None:
@@ -178,21 +222,20 @@ class LlamaCppServerEmbeddingModel:
         return content
 
     def encode(self, items: List[EmbeddingRequestItem]) -> np.ndarray:
-        """
-        Encode items. Each item should be an EmbeddingRequestItem.
-        """
         embeddings = []
 
         for i, item in tqdm(enumerate(items), total=len(items), desc="Encoding", unit="item"):
-            # Process content with optional tokenizer trimming
             processed_content = self._process_content(item["content"])
             payload = {"content": processed_content}
             
-            # Process image if present
             if item["image"] is not None:
                 data_url = self._image_to_data_url(item["image"])
-                payload["image"] = data_url
+                b64_bin, shape = self._image_to_pixel_values(item["content"], item["image"])
                 
+                payload["image"] = data_url
+                payload["prebuilt_image"] = b64_bin
+                payload["prebuilt_image_shape"] = shape # type: ignore
+            
             is_image_request = item["image"] is not None
             response = requests.post(f"{self.server_url}/embedding", json=payload)
             assert response.status_code == 200, f"Server error: {response.text}"
@@ -209,18 +252,15 @@ class LlamaCppServerEmbeddingModel:
             if self.hf_tokenizer and len(processed_content) != len(item["content"]):
                 self._log(f"✂️ Text trimmed: {len(item['content'])} -> {len(processed_content)} chars")
             
-            # Check if embeddings are already normalized
             embedding_array = np.array(raw_embedding)
             norms = np.linalg.norm(embedding_array, axis=1)
             if np.allclose(norms, 1.0, atol=1e-6):
                 self._log(f"⚠️ WARNING: Raw embeddings appear to be already normalized!")
             
-            # Handle image token extraction
             if is_image_request:
                 start_idx = embedding_data["start_image_token_idx"]
                 end_idx = embedding_data["end_image_token_idx"]    
-                hidden_states = np.array(raw_embedding)
-                # we need to capture <|vision_start|> ... <|vision_end|>
+                hidden_states = embedding_array
                 image_embeddings = hidden_states[start_idx-1:end_idx+2]  
                 pooled = image_embeddings.mean(axis=0)
                 self._log(f"🖼️ Image token indices: start={start_idx}, end={end_idx}")
@@ -228,11 +268,9 @@ class LlamaCppServerEmbeddingModel:
                 self._log(f"🖼️ Original total embeddings: {len(raw_embedding)}")
                 self._log(f"🖼️ Image embeddings extracted: {len(image_embeddings)}")
             else:
-                # Regular text processing - always mean pool the tokens
-                hidden_states = np.array(raw_embedding)
+                hidden_states = embedding_array
                 pooled = hidden_states.mean(axis=0)
 
-            # Optional normalization
             if self.normalize:
                 norm = np.linalg.norm(pooled)
                 if norm > 0:

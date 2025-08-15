@@ -28,6 +28,7 @@
 #include <numeric>
 #include <functional>
 
+
 struct clip_logger_state g_logger_state = {GGML_LOG_LEVEL_CONT, clip_log_callback_default, NULL};
 
 enum ffn_op_type {
@@ -3254,158 +3255,6 @@ struct image_manipulation {
         return {w_bar, h_bar};
     }
 
-    // Qwen2-VL patchification to match Torch processor._preprocess()
-    // Assumes img_f32.buf is HWC interleaved RGB per frame
-    // Fully honours merge_size, temporal duplication, and per-patch vectorization order
-    // Torch order after transpose: [merge_h, merge_w, channel, temporal, ph, pw] with pw fastest
-
-    // static std::vector<float> patchify_qwen2vl(
-    //         const clip_image_f32 & img_f32,
-    //         int patch_size,
-    //         int merge_size,
-    //         int temporal_patch_size,
-    //         size_t & out_patch_count,
-    //         size_t & out_patch_vec_len
-    //     ) {
-    //     const int H = img_f32.ny;   // height
-    //     const int W = img_f32.nx;   // width
-    //     const int C = 3;            // RGB
-
-    //     // Frame stride in floats (HWC layout)
-    //     const size_t frame_stride = (size_t)H * W * C;
-    //     const size_t total_floats = img_f32.buf.size();
-    //     const int T_src = (int)(total_floats / frame_stride); // typically 1 for single image
-    //     const int T_req = temporal_patch_size;                // usually 2 for Qwen2-VL
-
-    //     // Grid in merged space
-    //     const int grid_h = H / (patch_size * merge_size);
-    //     const int grid_w = W / (patch_size * merge_size);
-
-    //     out_patch_count   = (size_t)grid_h * grid_w * merge_size * merge_size;
-    //     out_patch_vec_len = (size_t)C * T_req * patch_size * patch_size;
-
-    //     printf("PATCHIFY: Image size: W=%d, H=%d, C=%d\n", W, H, C);
-    //     printf("PATCHIFY: patch_size=%d, merge_size=%d, temporal_patch_size=%d\n",
-    //         patch_size, merge_size, T_req);
-    //     printf("PATCHIFY: frames_in_buffer (T_src)=%d, will_effectively_use=%d (Torch repeats last if needed)\n",
-    //         T_src, std::max(T_src, T_req));
-    //     printf("PATCHIFY: grid_h=%d, grid_w=%d => total patches=%zu\n",
-    //         grid_h, grid_w, out_patch_count);
-    //     printf("PATCHIFY: vector length per patch = %zu floats\n", out_patch_vec_len);
-
-    //     // First-row probe (channel 0, y=0)
-    //     if (total_floats >= (size_t)W * C) {
-    //         printf("PATCHIFY: First 10 floats of channel 0, row 0: ");
-    //         for (int i = 0; i < std::min(W, 10); ++i) {
-    //             size_t idx = 0 * frame_stride + 0 * W * C + i * C + 0;
-    //             printf("%.6f ", img_f32.buf[idx]);
-    //         }
-    //         printf("\n");
-    //     }
-
-    //     // Allocate output
-    //     std::vector<float> patches;
-    //     patches.resize(out_patch_count * out_patch_vec_len);
-    //     float *dst = patches.data();
-    //     size_t write = 0;
-
-    //     // Traverse patches in grid order
-    //     for (int gh = 0; gh < grid_h; ++gh) {
-    //         for (int gw = 0; gw < grid_w; ++gw) {
-
-    //             // merge_size splits inside each coarse grid cell
-    //             for (int ms_h = 0; ms_h < merge_size; ++ms_h) {
-    //                 for (int ms_w = 0; ms_w < merge_size; ++ms_w) {
-
-    //                     // Per-patch vector order: channel → temporal → ph → pw (pw fastest)
-    //                     for (int c = 0; c < C; ++c) {
-    //                         for (int t = 0; t < T_req; ++t) {
-    //                             const int t_eff = (T_src == 0) ? 0 : std::min(t, T_src - 1);
-
-    //                             for (int ph = 0; ph < patch_size; ++ph) {
-    //                                 const int y = gh * (patch_size * merge_size) + ms_h * patch_size + ph;
-
-    //                                 for (int pw = 0; pw < patch_size; ++pw) {
-    //                                     const int x = gw * (patch_size * merge_size) + ms_w * patch_size + pw;
-
-    //                                     size_t idx = (size_t)t_eff * frame_stride +
-    //                                                 (size_t)y * W * C +
-    //                                                 (size_t)x * C +
-    //                                                 (size_t)c;
-
-    //                                     dst[write++] = img_f32.buf[idx];
-    //                                 }
-    //                             }
-    //                         }
-    //                     }
-    //                 }
-    //             }
-    //         }
-    //     }
-
-    //     // Preview first patch
-    //     printf("PATCHIFY: First patch, first 20 floats: ");
-    //     for (int i = 0; i < std::min<int>(20, out_patch_vec_len); ++i) {
-    //         printf("%.6f ", patches[i]);
-    //     }
-    //     printf("...\n");
-
-    //     return patches;
-    // }
-
-    static std::vector<float> patchify_qwen2vl(
-        const clip_image_f32 & img_f32,
-        int patch_size,
-        int merge_size,
-        int temporal_patch_size, // usually 2
-        size_t & out_patch_count,
-        size_t & out_patch_vec_len
-    ) {
-        const int W = img_f32.nx;
-        const int H = img_f32.ny;
-        const int C = 3;
-
-        const size_t frame_stride = (size_t)H * W * C;
-        const int T_src = (int)(img_f32.buf.size() / frame_stride);
-
-        const int grid_h = H / patch_size;
-        const int grid_w = W / patch_size;
-
-        out_patch_count   = (size_t)grid_h * grid_w;
-        out_patch_vec_len = (size_t)C * temporal_patch_size * patch_size * patch_size;
-
-        std::vector<float> patches(out_patch_count * out_patch_vec_len);
-        size_t write = 0;
-
-        for (int gh = 0; gh < grid_h / merge_size; ++gh) {
-            for (int gw = 0; gw < grid_w / merge_size; ++gw) {
-                for (int ms_h = 0; ms_h < merge_size; ++ms_h) {
-                    for (int ms_w = 0; ms_w < merge_size; ++ms_w) {
-                        for (int c = 0; c < C; ++c) {
-                            for (int ph = 0; ph < patch_size; ++ph) {
-                                int y = (gh * merge_size + ms_h) * patch_size + ph;
-                                for (int pw = 0; pw < patch_size; ++pw) {
-                                    int x = (gw * merge_size + ms_w) * patch_size + pw;
-                                    size_t idx =
-                                        (size_t)0 * frame_stride + // single frame
-                                        (size_t)y * W * C +
-                                        (size_t)x * C +
-                                        (size_t)c;
-
-                                    float val = img_f32.buf[idx];
-                                    // write twice for the 2 temporal slots
-                                    patches[write++] = val;
-                                    patches[write++] = val;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        return patches;
-    }
 
 private:
     static inline int clip(int x, int lower, int upper) {
@@ -3753,96 +3602,84 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         image_manipulation::bicubic_resize(*img, resized, new_size.width, new_size.height);
 
         // LOG AFTER RESIZE
-        printf("CLIP_PREPROCESS: Original size: %dx%d\n", original_size.width, original_size.height);
-        printf("CLIP_PREPROCESS: Resized to: %dx%d\n", new_size.width, new_size.height);
-        printf("CLIP_PREPROCESS: Factor: %d, Min pixels: %d, Max pixels: %d\n", factor, min_pixels, max_pixels);
-        printf("CLIP_PREPROCESS: First 50 resized uint8 pixels: ");
         for (int i = 0; i < std::min(50, (int)(resized.nx * resized.ny * 3)); i++) {
             printf("%d ", (int)resized.buf[i]);
         }
         printf("\n");
 
         clip_image_f32_ptr img_f32(clip_image_f32_init());
-        printf("CLIP_PREPROCESS: image_mean/std: [%.6f, %.6f, %.6f] / [%.6f, %.6f, %.6f]\n", params.image_mean[0], params.image_mean[1], params.image_mean[2], params.image_std[0], params.image_std[1], params.image_std[2]);
         normalize_image_u8_to_f32(resized, *img_f32, params.image_mean, params.image_std);
 
-        // LOG AFTER NORMALIZATION
-        printf("CLIP_PREPROCESS: First 50 normalized float pixels: ");
-        for (int i = 0; i < std::min(50, (int)img_f32->buf.size()); i++) {
-            printf("%.6f ", img_f32->buf[i]);
-        }
-        printf("\n");
-
         // --- PATCH_EMBEDDING TEST (toy graph) ---
-        {
-            auto & model = ctx->model;
+        // {
+        //     auto & model = ctx->model;
 
-            // 1. Patchify input image (already normalized) into [patch_count, patch_vec_len]
-            size_t patch_count, patch_vec_len;
-            auto patches_vec = image_manipulation::patchify_qwen2vl(
-                *img_f32,
-                /*patch_size=*/14,
-                /*merge_size=*/2,
-                /*temporal_patch_size=*/2,
-                patch_count,
-                patch_vec_len
-            );
+        //     // 1. Patchify input image (already normalized) into [patch_count, patch_vec_len]
+        //     size_t patch_count, patch_vec_len;
+        //     auto patches_vec = image_manipulation::patchify_qwen2vl(
+        //         *img_f32,
+        //         /*patch_size=*/14,
+        //         /*merge_size=*/2,
+        //         /*temporal_patch_size=*/2,
+        //         patch_count,
+        //         patch_vec_len
+        //     );
 
-            printf("PATCHIFY: patch_count=%zu, patch_vec_len=%zu\n", patch_count, patch_vec_len);
+        //     // TODO: get patch embeddings from request, patch_count and patch_vec_len (this is default)
 
-            // 2. Get the flat weights tensor from model (already F32 in export)
-            ggml_tensor *wflat = model.patch_embeddings_flat; // [n_embd, patch_vec_len]
-            GGML_ASSERT(wflat != nullptr);
-            GGML_ASSERT(wflat->type == GGML_TYPE_F32);
+        //     // 2. Get the flat weights tensor from model (already F32 in export)
+        //     ggml_tensor *wflat = model.patch_embeddings_flat; // [n_embd, patch_vec_len]
+        //     GGML_ASSERT(wflat != nullptr);
+        //     GGML_ASSERT(wflat->type == GGML_TYPE_F32);
 
-            int64_t n_embd = wflat->ne[1]; // ne1 = output embedding dim
-            printf("WEIGHTS: ne0=%lld, ne1=%lld (expect ne0=%zu)\n",
-                (long long)wflat->ne[0], (long long)wflat->ne[1], patch_vec_len);
-            GGML_ASSERT((size_t)wflat->ne[0] == patch_vec_len);
+        //     int64_t n_embd = wflat->ne[1]; // ne1 = output embedding dim
+        //     printf("WEIGHTS: ne0=%lld, ne1=%lld (expect ne0=%zu)\n",
+        //         (long long)wflat->ne[0], (long long)wflat->ne[1], patch_vec_len);
+        //     GGML_ASSERT((size_t)wflat->ne[0] == patch_vec_len);
 
-            // 3. Allocate a scratch GGML context for the test matmul
-            size_t bytes_needed =
-                patch_count * patch_vec_len +
-                patch_vec_len * n_embd +
-                patch_count * n_embd;
+        //     // 3. Allocate a scratch GGML context for the test matmul
+        //     size_t bytes_needed =
+        //         patch_count * patch_vec_len +
+        //         patch_vec_len * n_embd +
+        //         patch_count * n_embd;
 
-            bytes_needed *= sizeof(float);
+        //     bytes_needed *= sizeof(float);
 
-            ggml_init_params ip_test = {};
-            ip_test.mem_size   = bytes_needed + 1000*1024;
-            ip_test.mem_buffer = malloc(ip_test.mem_size);
-            ip_test.no_alloc   = false;
+        //     ggml_init_params ip_test = {};
+        //     ip_test.mem_size   = bytes_needed + 1000*1024;
+        //     ip_test.mem_buffer = malloc(ip_test.mem_size);
+        //     ip_test.no_alloc   = false;
 
-            ggml_context *ctx_test = ggml_init(ip_test);
+        //     ggml_context *ctx_test = ggml_init(ip_test);
 
-            // 4. Create GGML tensor for patches [patch_vec_len, patch_count]
-            ggml_tensor *t_patches = ggml_new_tensor_2d(ctx_test, GGML_TYPE_F32, patch_vec_len, patch_count);
-            memcpy(ggml_get_data_f32(t_patches), patches_vec.data(),
-                patch_vec_len * patch_count * sizeof(float));
+        //     // 4. Create GGML tensor for patches [patch_vec_len, patch_count]
+        //     ggml_tensor *t_patches = ggml_new_tensor_2d(ctx_test, GGML_TYPE_F32, patch_vec_len, patch_count);
+        //     memcpy(ggml_get_data_f32(t_patches), patches_vec.data(),
+        //         patch_vec_len * patch_count * sizeof(float));
 
-            // 5. Create GGML tensor for weights [patch_vec_len, n_embd]
-            ggml_tensor *t_wflat = ggml_new_tensor_2d(ctx_test, GGML_TYPE_F32, patch_vec_len, n_embd);
-            memcpy(ggml_get_data_f32(t_wflat), ggml_get_data_f32(wflat),
-                patch_vec_len * n_embd * sizeof(float));
+        //     // 5. Create GGML tensor for weights [patch_vec_len, n_embd]
+        //     ggml_tensor *t_wflat = ggml_new_tensor_2d(ctx_test, GGML_TYPE_F32, patch_vec_len, n_embd);
+        //     memcpy(ggml_get_data_f32(t_wflat), ggml_get_data_f32(wflat),
+        //         patch_vec_len * n_embd * sizeof(float));
 
-            // 6. Matmul -> output [n_embd, patch_count]
-            ggml_tensor *t_out = ggml_mul_mat(ctx_test, t_wflat, t_patches);
+        //     // 6. Matmul -> output [n_embd, patch_count]
+        //     ggml_tensor *t_out = ggml_mul_mat(ctx_test, t_wflat, t_patches);
 
-            // 7. Build + run graph
-            ggml_cgraph *gf = ggml_new_graph(ctx_test);
-            ggml_build_forward_expand(gf, t_out);
-            ggml_graph_compute_with_ctx(ctx_test, gf, /*n_threads=*/1);
+        //     // 7. Build + run graph
+        //     ggml_cgraph *gf = ggml_new_graph(ctx_test);
+        //     ggml_build_forward_expand(gf, t_out);
+        //     ggml_graph_compute_with_ctx(ctx_test, gf, /*n_threads=*/1);
 
-            // 8. Log the output like Torch’s patch_embeddings_final
-            log_params_t lp = create_default_log_params();
-            log_to_file_or_console_parameterized(nullptr, t_patches, &lp);
-            log_to_file_or_console_parameterized(nullptr, t_wflat, &lp);
-            log_to_file_or_console_parameterized(nullptr, t_out, &lp);
+        //     // 8. Log the output like Torch’s patch_embeddings_final
+        //     log_params_t lp = create_default_log_params();
+        //     log_to_file_or_console_parameterized(nullptr, t_patches, &lp);
+        //     log_to_file_or_console_parameterized(nullptr, t_wflat, &lp);
+        //     log_to_file_or_console_parameterized(nullptr, t_out, &lp);
 
-            // Cleanup
-            ggml_free(ctx_test);
-            free(ip_test.mem_buffer);
-        }
+        //     // Cleanup
+        //     ggml_free(ctx_test);
+        //     free(ip_test.mem_buffer);
+        // }
 
         res_imgs->entries.push_back(std::move(img_f32));
         return true;
