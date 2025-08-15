@@ -2616,6 +2616,11 @@ struct server_context {
             send_error(slot, "pooling is not supported for embeddings - use token-level embeddings only", ERROR_TYPE_SERVER);
             return;
         }
+        printf("pooling_type = %d (NONE=%d, MEAN=%d)\n", pooling_type, LLAMA_POOLING_TYPE_NONE, LLAMA_POOLING_TYPE_MEAN);
+
+        // Support both token-level and sequence-level embeddings
+        // Token-level: when pooling_type == NONE
+        // Sequence-level: when pooling_type != NONE (mean, cls, last, etc.)
 
         if (slot.has_stored_embeddings) {
             // *** MULTIMODAL EMBEDDING ASSEMBLY ***
@@ -2636,33 +2641,88 @@ struct server_context {
             // *** SET IMAGE END INDEX ***
             res->end_image_token_idx = slot.stored_pre_image_embeddings.size() + slot.stored_image_embeddings.size() - 1;
             
-            // Part 3: Post-image text embeddings (current batch) - token-level only
-            int post_image_embeddings = 0;
-            
-            for (int pos = 0; pos < batch.n_tokens; ++pos) {
-                const float * embd = llama_get_embeddings_ith(ctx, pos);
+            // Part 3: Post-image text embeddings (current batch)
+            if (pooling_type == LLAMA_POOLING_TYPE_NONE) {
+                // Token-level embeddings
+                printf("ASSEMBLY: Using token-level embeddings for post-image text\n");
+                int post_image_embeddings = 0;
+                
+                for (int pos = 0; pos < batch.n_tokens; ++pos) {
+                    const float * embd = llama_get_embeddings_ith(ctx, pos);
+                    if (embd == nullptr) {
+                        printf("ERROR: Missing post-image embedding at batch pos %d\n", pos);
+                        send_error(slot, "missing post-image embedding at position " + std::to_string(pos), ERROR_TYPE_SERVER);
+                        return;
+                    }
+                    
+                    res->embedding.emplace_back(embd, embd + n_embd);
+                    post_image_embeddings++;
+                    if (pos < 3) {
+                        printf("ASSEMBLY: Found post-image embedding at batch pos %d\n", pos);
+                    }
+                }
+                printf("ASSEMBLY: Added %d post-image embeddings from current batch\n", post_image_embeddings);
+            } else {
+                // Sequence-level embeddings
+                printf("ASSEMBLY: Using sequence-level embeddings for post-image text\n");
+                const float * embd = llama_get_embeddings_seq(ctx, slot.id);
                 if (embd == nullptr) {
-                    send_error(slot, "missing post-image embedding at position " + std::to_string(pos), ERROR_TYPE_SERVER);
+                    printf("ERROR: Missing post-image sequence embedding for slot id %d\n", slot.id);
+                    send_error(slot, "missing post-image sequence embedding for slot", ERROR_TYPE_SERVER);
                     return;
                 }
                 
                 res->embedding.emplace_back(embd, embd + n_embd);
-                post_image_embeddings++;
+                printf("ASSEMBLY: Added 1 post-image sequence embedding\n");
             }
+            
+            int post_embeddings_count = (pooling_type == LLAMA_POOLING_TYPE_NONE) ? 
+                batch.n_tokens : 1;
+            
+            printf("ASSEMBLY: Total multimodal embeddings: %zu (pre:%zu + img:%zu + post:%d)\n",
+                res->embedding.size(),
+                slot.stored_pre_image_embeddings.size(),
+                slot.stored_image_embeddings.size(),
+                post_embeddings_count);
+            
+            printf("ASSEMBLY: Image token indices: start=%d, end=%d\n", 
+                res->start_image_token_idx, res->end_image_token_idx);
 
         } else {
-            // *** REGULAR TEXT-ONLY EMBEDDING - TOKEN-LEVEL ONLY ***
+            // *** REGULAR TEXT-ONLY EMBEDDING ***
+            printf("ASSEMBLY: Text-only embedding\n");
             
-            int embeddings_found = 0;
-            for (int pos = 0; pos < slot.n_past; ++pos) {
-                const float * embd = llama_get_embeddings_ith(ctx, pos);
+            if (pooling_type == LLAMA_POOLING_TYPE_NONE) {
+                // Token-level embeddings
+                printf("ASSEMBLY: Using token-level embeddings\n");
+                int embeddings_found = 0;
+                for (int pos = 0; pos < batch.n_tokens; ++pos) {
+                    const float * embd = llama_get_embeddings_ith(ctx, pos);
+                    if (embd == nullptr) {
+                        printf("ERROR: Missing text embedding at pos %d\n", pos);
+                        send_error(slot, "missing text embedding at position " + std::to_string(pos), ERROR_TYPE_SERVER);
+                        return;
+                    }
+                    
+                    res->embedding.emplace_back(embd, embd + n_embd);
+                    embeddings_found++;
+                    if (pos < 3 || pos >= batch.n_tokens - 3) {
+                        printf("Found embedding at pos %d\n", pos);
+                    }
+                }
+                printf("Total embeddings found: %d out of %d positions\n", embeddings_found, batch.n_tokens);
+            } else {
+                // Sequence-level embeddings (mean, cls, last, etc.)
+                printf("ASSEMBLY: Using sequence-level embeddings (pooling_type=%d)\n", pooling_type);
+                const float * embd = llama_get_embeddings_seq(ctx, slot.id);
                 if (embd == nullptr) {
-                    send_error(slot, "missing text embedding at position " + std::to_string(pos), ERROR_TYPE_SERVER);
+                    printf("ERROR: Missing sequence embedding for slot id %d\n", slot.id);
+                    send_error(slot, "missing sequence embedding for slot", ERROR_TYPE_SERVER);
                     return;
                 }
                 
                 res->embedding.emplace_back(embd, embd + n_embd);
-                embeddings_found++;
+                printf("Found sequence embedding for slot id %d\n", slot.id);
             }
         }
 
