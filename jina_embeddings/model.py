@@ -92,26 +92,40 @@ class LlamaCppServerEmbeddingModel:
         self._log(f"Starting llama-server with: {' '.join(cmd)}")
         self.server_process = subprocess.Popen(cmd, env=env)
 
-    def _wait_for_server(self, max_wait_time: int = 300, check_interval: int = 2) -> None:
-        """Wait for the server to be ready via the /props endpoint."""
-        self._log("Waiting for server to start...")
-        props_url = f"{self.server_url}/props"
+    def _wait_for_server(self, max_wait_time: int = 600, check_interval: float = 2.0) -> None:
+        """Poll /health until the model is loaded (200). 503 means 'still loading'."""
+        health_url = f"{self.server_url.rstrip('/')}/health"
+        self._log(f"Waiting for server via {health_url} ...")
 
-        start_time = time.time()
+        deadline = time.monotonic() + max_wait_time
+        last_status = None          # track last status to avoid repeating the same log
+        last_heartbeat = 0.0        # rate-limit logs
+        HEARTBEAT_EVERY = 20.0      # seconds
+
         while True:
-            elapsed = time.time() - start_time
-            if elapsed > max_wait_time:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 raise TimeoutError(f"Server did not become ready within {max_wait_time} seconds")
+
             try:
-                r = requests.get(props_url, timeout=10)
+                r = requests.get(health_url, timeout=min(10, max(1, remaining)))
                 if r.status_code == 200:
-                    self._log("✅ Server is ready! (props endpoint responded)")
-                    break
-                else:
-                    self._log(f"⚠️ /props returned {r.status_code}, still waiting... ({elapsed:.1f}s elapsed)")
-            except requests.exceptions.RequestException as e:
-                self._log(f"⏳ Waiting for server to start... ({elapsed:.1f}s elapsed) Error: {e}")
-            time.sleep(check_interval)
+                    self._log("✅ Server is ready! (/health returned 200)")
+                    return
+
+                status = "Loading model" if r.status_code == 503 else f"HTTP {r.status_code}"
+            except requests.RequestException as e:
+                status = f"network error: {e}"
+
+            # log only on status change or periodic heartbeat
+            now = time.monotonic()
+            if status != last_status or (now - last_heartbeat) >= HEARTBEAT_EVERY:
+                elapsed = int(max_wait_time - remaining)
+                self._log(f"⏳ {status}... ({elapsed}s elapsed)")
+                last_status = status
+                last_heartbeat = now
+
+            time.sleep(min(check_interval, max(0.1, deadline - time.monotonic())))
 
     def shutdown_server(self) -> None:
         """Shutdown the llama-server process"""

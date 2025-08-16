@@ -53,7 +53,9 @@ python infer_cosine.py   \
     --normalize
 ```
 
+Use the fixed mmproj that has the flattened weights vector.
 ```bash
+MTMD_DEBUG_GRAPH=1 \
 python jina_embeddings/infer_cosine.py   \
     --llama-bin /Users/andrei/Documents/GitHub/jina-llama.cpp/build/bin/llama-server   \
     --model /Users/andrei/Documents/gguf/jev4-bf16.gguf   \

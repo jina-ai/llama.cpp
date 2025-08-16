@@ -63,6 +63,7 @@ log_params_t create_default_log_params() {
     return params;
 }
 
+// TODO: simplify this function, it's raising a bunch of warnings
 void log_to_file_or_console_parameterized(
     FILE* output_file, 
     ggml_tensor* t,
@@ -840,6 +841,8 @@ struct clip_graph {
         // Normal conv2d pipeline
         ggml_tensor * inp = nullptr;
 
+        printf("about to build patch_embeddings\n");
+
 
         if (uses_precomputed_image) {
 
@@ -852,11 +855,13 @@ struct clip_graph {
             ggml_tensor * inp_raw = build_inp_raw();
             cb(inp_raw, "inp_raw", -1);
 
+            printf("built inp_raw\n");
+
             ggml_tensor * inp_0 = ggml_conv_2d(ctx0, model.patch_embeddings_0, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
             GGML_ASSERT(img.nx % (patch_size * 2) == 0);
             GGML_ASSERT(img.ny % (patch_size * 2) == 0);
 
-            ggml_tensor * inp = inp_0;  
+            inp = inp_0;  
 
             {
                 auto inp_1 = ggml_conv_2d(ctx0, model.patch_embeddings_1, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
@@ -879,6 +884,8 @@ struct clip_graph {
             }
 
         }
+
+        printf("finalized building patch_embeddings\n");
 
         cb(inp, "patch_embeddings_final", -1);
 
@@ -1015,8 +1022,10 @@ struct clip_graph {
 
         cb(embeddings, "image_embeddings", -1);
 
-        // build the graph
         ggml_build_forward_expand(gf, embeddings);
+        
+        printf("build_qwen2vl: built graph successfully\n");
+
         return gf;
     }
 
@@ -4087,7 +4096,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     if (uses_precomputed_img) {
         GGML_ASSERT(imgs.entries.size() == 1);
         GGML_ASSERT(ctx->model.proj_type == PROJECTOR_TYPE_QWEN25VL);
-        // set_input_f32("inp_raw", imgs.entries[0]->buf);
+        set_input_f32("inp_raw", imgs.entries[0]->buf);
     } else {
         if (!imgs.is_audio) {
             size_t nelem = 0;
