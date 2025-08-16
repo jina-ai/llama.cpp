@@ -235,10 +235,10 @@ class LlamaCppServerEmbeddingModel:
             payload = {"content": processed_content}
             
             if item["image"] is not None:
-                data_url = self._image_to_data_url(item["image"])
+                # data_url = self._image_to_data_url(item["image"])
                 b64_bin, shape = self._image_to_pixel_values(item["content"], item["image"])
                 
-                payload["image"] = data_url
+                # payload["image"] = data_url
                 payload["prebuilt_image"] = b64_bin
                 payload["prebuilt_image_shape"] = shape # type: ignore
             

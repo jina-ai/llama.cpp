@@ -1914,8 +1914,9 @@ private:
     }
 
     ggml_tensor * build_inp_raw_precomputed() {
-        ggml_tensor * inp_raw = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, img.nx * img.ny, d_head);
-        ggml_set_name(inp_raw, "inp_raw_precomputed");
+        ggml_tensor * inp_raw = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, img.p_dim, img.npx * img.npy);
+        printf("Building input with shape [%d, %d] (precomputed)\n", img.p_dim, img.npx * img.npy);
+        ggml_set_name(inp_raw, "inp_raw");
         ggml_set_input(inp_raw);
         return inp_raw;
     }
