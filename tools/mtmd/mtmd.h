@@ -45,8 +45,6 @@
 extern "C" {
 #endif
 
-using raw_buffer = std::vector<uint8_t>;
-
 enum mtmd_input_chunk_type {
     MTMD_INPUT_CHUNK_TYPE_TEXT,
     MTMD_INPUT_CHUNK_TYPE_IMAGE,
@@ -201,8 +199,11 @@ MTMD_API int32_t mtmd_tokenize(mtmd_context * ctx,
 MTMD_API int32_t mtmd_tokenize_prebuilt(mtmd_context * ctx,
                                         mtmd_input_chunks * output,
                                         const mtmd_input_text * text,
-                                        const std::vector<raw_buffer> & prebuilt_images,
-                                        const std::vector<std::array<uint32_t, 2>> & prebuilt_shapes);
+                                        const float * const * prebuilt_images,   // array of float32 buffers
+                                        const size_t * prebuilt_sizes,           // array of sizes (floats per buffer)
+                                        size_t num_images,                       // number of buffers
+                                        const uint32_t (*prebuilt_shapes)[3],    // array of {ny, nx, embed_dim}
+                                        size_t num_shapes);                      // number of shapes
 
 // returns 0 on success
 // TODO: deprecate

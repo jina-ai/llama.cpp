@@ -88,6 +88,7 @@ enum error_type {
     ERROR_TYPE_NOT_SUPPORTED, // custom error
 };
 
+
 static bool server_task_type_need_embd(server_task_type task_type) {
     switch (task_type) {
         case SERVER_TASK_TYPE_EMBEDDING:
@@ -4719,9 +4720,9 @@ int main(int argc, char ** argv) {
         const auto & prompt = oaicompat ? data.at("prompt") : data.at("content");
 
         raw_buffer file;                 // for raw image (decoded bitmap)
-        raw_buffer prebuilt_image;       // for patch embeddings (.bin float32)
-        std::array<uint32_t, 2> prebuilt_shape = {0, 0}; // [nx, ny]
 
+        std::vector<std::vector<float>> prebuilt_images;        // float32 patch embeddings
+        std::vector<std::array<uint32_t, 3>> prebuilt_shapes;   // [ny, nx, embed_dim]
 
         // Decode normal image if present
         if (data.contains("image")) {
@@ -4735,23 +4736,36 @@ int main(int argc, char ** argv) {
         // Decode prebuilt patch embeddings if present
         if (data.contains("prebuilt_image")) {
             std::string b64_bin = data.at("prebuilt_image");
-            prebuilt_image = base64_decode(b64_bin);
+            raw_buffer bytes = base64_decode(b64_bin); // raw bytes (uint8_t)
 
-            if (!data.contains("prebuilt_image_shape") || data.at("prebuilt_image_shape").size() != 2) {
-                throw std::runtime_error("Missing or invalid prebuilt_image_shape");
+            if (bytes.size() % sizeof(float) != 0) {
+                throw std::runtime_error("prebuilt_image size is not a multiple of 4 (float32)");
             }
-            prebuilt_shape[0] = data.at("prebuilt_image_shape")[0].get<uint32_t>(); // nx
-            prebuilt_shape[1] = data.at("prebuilt_image_shape")[1].get<uint32_t>(); // ny
+
+            // reinterpret as float32
+            size_t n_floats = bytes.size() / sizeof(float);
+            std::vector<float> floats(n_floats);
+            std::memcpy(floats.data(), bytes.data(), bytes.size());
+
+            prebuilt_images.push_back(std::move(floats));
+
+            // Parse shape = [ny, nx, embed_dim]
+            if (!data.contains("prebuilt_image_shape") || data.at("prebuilt_image_shape").size() != 3) {
+                throw std::runtime_error("Missing or invalid prebuilt_image_shape (need [ny,nx,embed_dim])");
+            }
+
+            uint32_t ny  = data.at("prebuilt_image_shape")[0].get<uint32_t>();
+            uint32_t nx  = data.at("prebuilt_image_shape")[1].get<uint32_t>();
+            uint32_t dim = data.at("prebuilt_image_shape")[2].get<uint32_t>();
+
+            prebuilt_shapes.push_back({ ny, nx, dim });
         }
 
         mtmd::bitmaps bitmaps;
-        std::vector<std::unique_ptr<mtmd_image_tokens>> prebuilt_imgs;
-        std::vector<raw_buffer> prebuilt_images;
-        std::vector<std::array<uint32_t, 2>> prebuilt_shapes;
         
         const bool has_mtmd = ctx_server.mctx != nullptr;
 
-        if (!has_mtmd && (!file.empty() || !prebuilt_image.empty())) {
+        if (!has_mtmd && (!file.empty() || !prebuilt_images.empty())) {
             throw std::runtime_error("This server does not support multimodal");
         }
 
@@ -4770,17 +4784,10 @@ int main(int argc, char ** argv) {
             bitmaps.entries.push_back(std::move(bmp));
         }
 
-        // Prebuilt patch embeddings path
-        // TODO: instanciate them duh
-        if (!prebuilt_image.empty()) {
-            prebuilt_images.push_back(prebuilt_image);
-            prebuilt_shapes.push_back({ prebuilt_shape[0], prebuilt_shape[1] });
-        }
-
         // Process prompt
         std::vector<server_tokens> inputs;
 
-        if (has_mtmd && (!bitmaps.entries.empty() || !prebuilt_imgs.empty())) {
+        if (has_mtmd && (!bitmaps.entries.empty() || !prebuilt_images.empty())) {
             std::string prompt_str;
             if (prompt.is_string()) {
                 prompt_str = prompt.get<std::string>();
@@ -4807,14 +4814,31 @@ int main(int argc, char ** argv) {
                 if (tokenized != 0) {
                     throw std::runtime_error("Failed to tokenize prompt (bitmap path)");
                 }
+
             } else if (!prebuilt_images.empty()) {
+                
+                std::vector<const float*> img_ptrs;
+                std::vector<size_t>       img_sizes;
+
+                img_ptrs.reserve(prebuilt_images.size());
+                img_sizes.reserve(prebuilt_images.size());
+
+                for (auto & buf : prebuilt_images) {
+                    img_ptrs.push_back(buf.data());
+                    img_sizes.push_back(buf.size()); // number of floats
+                }
+
                 int32_t tokenized = mtmd_tokenize_prebuilt(
                     ctx_server.mctx,
                     chunks.ptr.get(),
                     &inp_txt,
-                    prebuilt_images,
-                    prebuilt_shapes
+                    img_ptrs.data(),                           // const float*[]
+                    img_sizes.data(),                          // size_t[] (#floats per buffer)
+                    img_ptrs.size(),
+                    reinterpret_cast<const uint32_t (*)[3]>(prebuilt_shapes.data()), // [ny,nx,dim]
+                    prebuilt_shapes.size()
                 );
+
                 if (tokenized != 0) {
                     throw std::runtime_error("Failed to tokenize prompt (prebuilt path)");
                 }
