@@ -11,7 +11,8 @@ import requests # type: ignore
 from PIL import Image # type: ignore
 from typing_extensions import TypedDict # type: ignore
 from tqdm import tqdm # type: ignore
-from transformers import AutoProcessor, AutoTokenizer # type: ignore
+# TODO: don't use AutoProcessor, use QWENprocessor instead ... 
+from transformers import Qwen2VLImageProcessorFast, Qwen2TokenizerFast # type: ignore
 
 
 class EmbeddingRequestItem(TypedDict):
@@ -57,9 +58,9 @@ class LlamaCppServerEmbeddingModel:
         
         # Load tokenizer if specified
         if self.hf_model_name is not None:
-            self._log(f"Loading HuggingFace processor and tokenizer for: {self.hf_model_name}")
-            self.hf_processor = AutoProcessor.from_pretrained(self.hf_model_name)
-            self.hf_tokenizer = AutoTokenizer.from_pretrained(self.hf_model_name, use_fast=True)
+            self._log(f"Loading hf processor and tokenizer for: {self.hf_model_name}")
+            self.hf_image_processor = Qwen2VLImageProcessorFast.from_pretrained(self.hf_model_name)
+            self.hf_tokenizer = Qwen2TokenizerFast.from_pretrained(self.hf_model_name)
 
         # Start server
         self._start_server()
@@ -190,29 +191,20 @@ class LlamaCppServerEmbeddingModel:
         else:
             raise TypeError(f"Image must be str (file path) or PIL.Image, got {type(image)}")
 
-        if not hasattr(self, "hf_processor"):
-            raise RuntimeError("hf_processor is not initialized. Load it in __init__.")
-
         # Processor generates patch embeddings
-        inputs = self.hf_processor(
-            text=[text],
-            images=[pil_image],
-            padding=True,
-            return_tensors="pt"
-        )
+        inputs = self.hf_image_processor(images=[pil_image], return_tensors="pt")
 
         pixel_values = inputs["pixel_values"].detach().cpu().numpy().astype("float32")  # (1, num_patches, embd)
-        num_patches, embd = pixel_values.shape[1], pixel_values.shape[2]
+        image_grid_thw = inputs["image_grid_thw"].detach().cpu().numpy().tolist() 
 
-        # Get grid shape
-        if "patch_grid" in inputs:
-            nx, ny = inputs["patch_grid"][0]
-        else:
-            nx = int(round(num_patches ** 0.5))
-            ny = num_patches // nx
-            if nx * ny != num_patches:
-                raise ValueError(f"Cannot infer patch grid from {num_patches} patches")
+        print(f"Created image patches (pixel values) with shape: {pixel_values.shape} ... \n")
+        print(pixel_values)
 
+        num_patches, embd = pixel_values.shape[0], pixel_values.shape[1]
+        _, nx, ny = image_grid_thw[0]
+
+        assert num_patches == nx * ny, f"Expected {nx}x{ny} patches, got {num_patches} patches"
+        
         # Convert to raw float32 binary
         buf = pixel_values.tobytes(order="C")
         b64_data = base64.b64encode(buf).decode("utf-8")

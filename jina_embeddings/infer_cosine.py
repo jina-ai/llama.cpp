@@ -107,7 +107,7 @@ def save_cosine_similarity_matrix(raw_lines: List[str], embeddings: np.ndarray, 
 @click.option('--document-prefix', default='Passage: ', help='Prefix for [DOCUMENT] lines')
 @click.option('--image-prefix', default='<|im_start|>user\n<__image__>Describe the image.<|im_end|>\n', help='Prefix for [IMAGE] lines')
 @click.option('--logging/--no-logging', default=True, help='Enable/disable logging output')
-@click.option('--hf-model-name', help='HuggingFace model name for tokenizer and processor')
+@click.option('--hf-model-name', default='/Users/andrei/Downloads/jev4-retrieval', help='HuggingFace model name for tokenizer and processor')
 @click.option('--max-text-length', default=512, help='Maximum text length in tokens (requires --hf-tokenizer-name)')
 def main(
     llama_bin, 
