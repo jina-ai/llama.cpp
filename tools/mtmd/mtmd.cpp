@@ -838,8 +838,8 @@ struct mtmd_tokenizer {
         // ---- Create mtmd_image_tokens ----
         mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
         image_tokens->use_mrope_pos = true;
-        image_tokens->nx = npx; // tokens in X = number of patches
-        image_tokens->ny = npy; // tokens in Y = number of patches
+        image_tokens->nx = npx / 2; // tokens in X = number of patches, divided by merge_ratio 2
+        image_tokens->ny = npy / 2; // tokens in Y = number of patches, divided by merge_ratio 2
         image_tokens->batch_f32 = std::move(batch_f32);
 
         // Generate ID from float32 buffer (FNV hash on raw bytes)
@@ -948,7 +948,7 @@ int32_t mtmd_tokenize_prebuilt(mtmd_context * ctx,
                                size_t num_images,
                                const uint32_t (*prebuilt_shapes)[3],
                                size_t num_shapes) {
-                                
+
     mtmd_tokenizer tokenizer(ctx,
                              text,
                              prebuilt_images,
