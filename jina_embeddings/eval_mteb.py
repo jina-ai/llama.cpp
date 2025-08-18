@@ -175,7 +175,7 @@ class MTEBModelWrapper:
         logger.info(f"Encoding {len(texts)} text embeddings")
         
         # Apply document prefix to texts
-        processed_texts = [self.document_prefix + text for text in texts]
+        processed_texts = [self.query_prefix + text for text in texts]
 
         # Process in batches with progress bar
         all_embeddings = []
@@ -214,6 +214,7 @@ class MTEBModelWrapper:
         """
         Get fused text+image embeddings for multimodal tasks
         """
+
         if texts is None or images is None:
             raise ValueError("Both texts and images must be provided for fused embeddings")
         
@@ -249,6 +250,8 @@ class MTEBModelWrapper:
                 
                 # Encode the batch using the embedding model
                 try:
+                    print("\n\n\n\n 🔗 Fused embeddings requested. Processing text and image pairs...")
+                    print("\n\n\n\n 🔗 Fused embeddings requested. Processing text and image pairs...")
                     batch_embeddings = self.embedding_model.encode(batch_items)
                     all_embeddings.extend(batch_embeddings)
                     pbar.update(len(batch_texts))
