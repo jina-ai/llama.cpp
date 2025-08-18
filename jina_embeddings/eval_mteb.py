@@ -101,13 +101,20 @@ class MTEBModelWrapper:
         logger.info("Text encoding done.")
         return np.array(all_embeddings)
 
-    # TODO: is the C, H, W assumption correct for MTEB / Vidore ? 
-    # TODO: is this the correct way to handle images in MTEB?
-    def _verify_image(self, image_data):
-        """Convert torch.Tensor to PIL.Image"""
-        if not isinstance(image_data, Image.Image):
-            raise ValueError("Input must be a PIL.Image.")
-        return image_data
+    def to_pil(self, image_data):
+        # Case 1: Already PIL
+        if isinstance(image_data, Image.Image):
+            return image_data.convert("RGB")
+
+        # Case 2: Torch tensor (CHW or HWC)
+        if isinstance(image_data, torch.Tensor):
+            t = image_data
+            if t.ndim == 3 and t.shape[0] in (1, 3, 4):  # CHW
+                t = t.permute(1, 2, 0)  # HWC
+            arr = t.numpy()
+            return Image.fromarray(arr).convert("RGB")
+
+        raise TypeError(f"Unsupported image type: {type(image_data)}")
 
     def get_image_embeddings(
         self,
@@ -143,7 +150,7 @@ class MTEBModelWrapper:
                 batch_items = []
                 for image in batch_images:
                     # Convert tensor to PIL if needed
-                    valid_image = self._verify_image(image)
+                    valid_image = self.to_pil(image)
                     
                     item: EmbeddingRequestItem = {
                         "content": self.image_prefix,
