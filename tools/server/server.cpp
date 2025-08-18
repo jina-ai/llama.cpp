@@ -4886,7 +4886,8 @@ int main(int argc, char ** argv) {
         }, [&](const json & error_data) {
             res_error(res, error_data);
         }, [&req]() {
-            return !req.has_header("Connection") || req.get_header_value("Connection") != "keep-alive";
+            // return !req.has_header("Connection") || req.get_header_value("Connection") != "keep-alive";
+            return req.is_connection_closed();
         });
 
         ctx_server.queue_results.remove_waiting_task_ids(task_ids);
