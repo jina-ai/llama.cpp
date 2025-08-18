@@ -70,6 +70,9 @@ class MTEBModelWrapper:
         """
         Encode text sentences for MTEB tasks
         """
+
+        raise NotImplementedError("MTEBModelWrapper should use get_text_embeddings or get_image_embeddings.")
+
         is_query = prompt_type == PromptType.query
         prefix = self.query_prefix if is_query else self.document_prefix
         logger.info(f"Encoding {len(sentences)} text inputs with prefix '{prefix}' for task {task_name}")
@@ -99,21 +102,11 @@ class MTEBModelWrapper:
         return np.array(all_embeddings)
 
     # TODO: is the C, H, W assumption correct for MTEB / Vidore ? 
-    def _convert_tensor_to_pil(self, image_data):
+    # TODO: is this the correct way to handle images in MTEB?
+    def _verify_image(self, image_data):
         """Convert torch.Tensor to PIL.Image"""
-        if isinstance(image_data, torch.Tensor):
-            # Assume tensor is in format [C, H, W] and normalized [0, 1]
-            if image_data.dim() == 3:
-                # Convert from CHW to HWC
-                image_data = image_data.permute(1, 2, 0)
-            
-            # Convert to numpy and scale to [0, 255]
-            if image_data.max() <= 1.0:
-                image_data = image_data * 255
-            
-            image_data = image_data.byte().cpu().numpy()
-            return Image.fromarray(image_data)
-        
+        if not isinstance(image_data, Image.Image):
+            raise ValueError("Input must be a PIL.Image.")
         return image_data
 
     def get_image_embeddings(
@@ -124,6 +117,7 @@ class MTEBModelWrapper:
         """
         Encode images for MTEB image tasks
         """
+        
         # Handle DataLoader vs list
         if hasattr(images, '__iter__') and not isinstance(images, list):
             # DataLoader yields batches, so we need to flatten them
@@ -149,11 +143,11 @@ class MTEBModelWrapper:
                 batch_items = []
                 for image in batch_images:
                     # Convert tensor to PIL if needed
-                    converted_image = self._convert_tensor_to_pil(image)
+                    valid_image = self._verify_image(image)
                     
                     item: EmbeddingRequestItem = {
                         "content": self.image_prefix,
-                        "image": converted_image
+                        "image": valid_image
                     }
                     batch_items.append(item)
                 

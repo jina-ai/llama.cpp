@@ -19,13 +19,18 @@ cmake --build build --config Release -j
 ```
 
 # Mteb eval
+You can donwload the mmproj like so:
+```
+huggingface-cli download jinaai/jina-embeddings-v4-text-retrieval-GGUF --include mmproj-jina-embeddings-v4-retrieval-BF16.gguf --local-dir /home/andrei/workspace/gguf
+```
+
 ```bash
 python eval_mteb.py \
 	--llama-bin /home/andrei/workspace/llama.cpp/build/bin/llama-server \
 	--model /home/andrei/workspace/gguf/jev4-bf16.gguf \
-	--mmproj /home/andrei/workspace/gguf/mmproj-jev4-bf16.gguf \
+	--mmproj /home/andrei/workspace/gguf/mmproj-jina-embeddings-v4-retrieval-BF16.gguf \
 	--tasks VidoreSyntheticDocQAEnergyRetrieval \
-	--output-dir /home/andrei/workspace/gguf/vidore/jev4-bf16 \
+	--output-dir /home/andrei/workspace/jev4-gguf-vidore-fixed \
 	--gpus 0 \
 	--no-logging \
 	--query-prefix "Query: " \
