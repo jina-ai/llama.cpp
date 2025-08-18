@@ -816,6 +816,11 @@ struct mtmd_tokenizer {
             return 1;
         }
 
+        if (!ctx->img_beg.empty()) {
+            printf("Adding image begin token: %s\n", ctx->img_beg.c_str());
+            add_text(ctx->img_beg, true);
+        }
+
         // ---- Build clip_image_f32 (precomputed patches) ----
         clip_image_f32_ptr img(new clip_image_f32);
         img->is_precomputed = true;
@@ -857,10 +862,12 @@ struct mtmd_tokenizer {
             std::move(image_tokens),
             nullptr // no audio tokens
         };
+
         cur.entries.emplace_back(std::move(chunk));
 
         // Optional "end of image" marker
         if (!ctx->img_end.empty()) {
+            printf("Adding image end token: %s\n", ctx->img_end.c_str());
             add_text(ctx->img_end, true);
         }
 

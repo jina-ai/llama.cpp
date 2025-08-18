@@ -1,2 +1,2 @@
 [QUERY] This is a cute dog.
-[IMAGE] /Users/andrei/Documents/GitHub/jina-llama.cpp/jina_embeddings/assets/dog.jpg
+[IMAGE] jina_embeddings/assets/dog.jpg
