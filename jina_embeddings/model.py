@@ -55,12 +55,12 @@ class LlamaCppServerEmbeddingModel:
         
         # Set server URL
         self.server_url = f"http://{host}:{port}"
+
+        if not hf_model_name:
+            raise ValueError("hf_model_name must be provided to load the processor and tokenizer.")
         
-        # Load tokenizer if specified
-        if self.hf_model_name is not None:
-            self._log(f"Loading hf processor and tokenizer for: {self.hf_model_name}")
-            self.hf_image_processor = Qwen2VLImageProcessorFast.from_pretrained(self.hf_model_name)
-            self.hf_tokenizer = Qwen2TokenizerFast.from_pretrained(self.hf_model_name)
+        self.hf_image_processor = Qwen2VLImageProcessorFast.from_pretrained(self.hf_model_name)
+        self.hf_tokenizer = Qwen2TokenizerFast.from_pretrained(self.hf_model_name)
 
         # Start server
         self._start_server()
@@ -94,7 +94,7 @@ class LlamaCppServerEmbeddingModel:
         self.server_process = subprocess.Popen(cmd, env=env)
 
     def _wait_for_server(self, max_wait_time: int = 600, check_interval: float = 2.0) -> None:
-        """Poll /health until the model is loaded (200). 503 means 'still loading'."""
+        """Poll /health until the model is loaded (200, 503 means 'still loading')."""
         health_url = f"{self.server_url.rstrip('/')}/health"
         self._log(f"Waiting for server via {health_url} ...")
 
@@ -250,18 +250,9 @@ class LlamaCppServerEmbeddingModel:
 
             self._log(f"\n==========================")
             self._log(f"🧠 Item {i + 1} embedding response")
-            self._log(f"📦 Type: {type(embedding_data).__name__}")
-            self._log(f"🔑 Keys: {list(embedding_data.keys())}")
-            self._log(f"🔎 Preview: {repr(embedding_data)[:500]}")
-            self._log(f"🔍 Raw embedding type: {type(raw_embedding)}")
             self._log(f"🔍 Raw embedding shape: {np.array(raw_embedding).shape}")
-            if self.hf_tokenizer and len(processed_content) != len(item["content"]):
-                self._log(f"✂️ Text trimmed: {len(item['content'])} -> {len(processed_content)} chars")
             
             embedding_array = np.array(raw_embedding)
-            norms = np.linalg.norm(embedding_array, axis=1)
-            if np.allclose(norms, 1.0, atol=1e-6):
-                self._log(f"⚠️ WARNING: Raw embeddings appear to be already normalized!")
             
             if is_image_request:
                 start_idx = embedding_data["start_image_token_idx"]
@@ -269,9 +260,8 @@ class LlamaCppServerEmbeddingModel:
                 hidden_states = embedding_array
                 image_embeddings = hidden_states[start_idx-1:end_idx+2]  
                 pooled = image_embeddings.mean(axis=0)
-                self._log(f"🖼️ Image token indices: start={start_idx}, end={end_idx}")
                 self._log(f"🖼️ Extracted image embeddings shape: {image_embeddings.shape}")
-                self._log(f"🖼️ Original total embeddings: {len(raw_embedding)}")
+                self._log(f"🖼️ Image token indices: start={start_idx}, end={end_idx}")
                 self._log(f"🖼️ Image embeddings extracted: {len(image_embeddings)}")
             else:
                 hidden_states = embedding_array
@@ -282,8 +272,6 @@ class LlamaCppServerEmbeddingModel:
                 if norm > 0:
                     pooled = pooled / norm
                     self._log(f"🔄 Applied L2 normalization")
-
-            self._log(f"==========================")
             
             embeddings.append(pooled)
 

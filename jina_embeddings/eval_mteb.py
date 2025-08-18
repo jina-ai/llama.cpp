@@ -310,8 +310,7 @@ def main(
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     # Load HuggingFace tokenizer if specified
-    if hf_pretrained:
-        logger.info(f"Tokenizer will be loaded by model: {hf_pretrained}")
+    logger.info(f"Tokenizer and processor will be loaded by model: {hf_pretrained}")
 
     # Parse tasks - handle special cases for ViDoRe
     task_list = [t.strip() for t in tasks.split(",")]
@@ -330,7 +329,7 @@ def main(
         ubatch_size=ubatch_size,
         normalize=normalize,
         logging=logging,
-        hf_tokenizer_name=hf_pretrained,
+        hf_model_name=hf_pretrained,
         max_text_length=max_text_length
     )
 
