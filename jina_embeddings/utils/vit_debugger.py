@@ -1,4 +1,3 @@
-# vit_debugger.py
 import torch  # type: ignore
 from dataclasses import dataclass
 from typing import Optional, Dict
@@ -19,7 +18,6 @@ class VitDebugger:
         self.params = params if params else LogParams()
         self.layer_outputs: Dict[str, torch.Tensor] = {}
 
-    # ---------- Tensor formatting ----------
     def _format_2d_tensor(self, tensor: torch.Tensor, name: str) -> str:
         rows, cols = tensor.shape
         lp = self.params
@@ -96,7 +94,6 @@ class VitDebugger:
         tensor_f32.tofile(filename)
         print(f"✅ Saved {tensor_f32.size} float32 values to {filename}")
 
-    # ---------- Output saving ----------
     def save_outputs(self):
         """Save all stored outputs in insertion order."""
         assert self.log_file, "Log file must be set to save outputs"
@@ -110,6 +107,6 @@ class VitDebugger:
                           f"=== {key} === Shape: {list(tensor.shape)} [Unsupported tensor dimension]"
                     f.write(msg + "\n\n")
 
-# --- Singleton instance ---
+
 log_params = LogParams(start_patch=0, num_patches=3, start_head=0, num_heads=5, start_dim=0, num_dims=10)
 vit_debugger = VitDebugger(log_file=None, params=log_params)

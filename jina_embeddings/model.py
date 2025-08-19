@@ -11,7 +11,6 @@ import requests # type: ignore
 from PIL import Image # type: ignore
 from typing_extensions import TypedDict # type: ignore
 from tqdm import tqdm # type: ignore
-# TODO: don't use AutoProcessor, use QWENprocessor instead ... 
 from transformers import Qwen2VLImageProcessorFast, Qwen2TokenizerFast # type: ignore
 
 
@@ -33,7 +32,7 @@ class LlamaCppServerEmbeddingModel:
         ctx_size: int = 4096,
         ubatch_size: int = 4096,
         normalize: bool = False, 
-        logging: bool = True,
+        logging: bool = False,
         hf_model_name: Optional[str] = None,
         max_text_length: int = 512
     ) -> None:
@@ -93,40 +92,18 @@ class LlamaCppServerEmbeddingModel:
         self._log(f"Starting llama-server with: {' '.join(cmd)}")
         self.server_process = subprocess.Popen(cmd, env=env)
 
-    def _wait_for_server(self, max_wait_time: int = 600, check_interval: float = 2.0) -> None:
-        """Poll /health until the model is loaded (200, 503 means 'still loading')."""
-        health_url = f"{self.server_url.rstrip('/')}/health"
-        self._log(f"Waiting for server via {health_url} ...")
-
+    def _wait_for_server(self, max_wait_time: int = 600, interval: float = 2.0) -> None:
+        url = f"{self.server_url.rstrip('/')}/health"
         deadline = time.monotonic() + max_wait_time
-        last_status = None          # track last status to avoid repeating the same log
-        last_heartbeat = 0.0        # rate-limit logs
-        HEARTBEAT_EVERY = 20.0      # seconds
-
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError(f"Server did not become ready within {max_wait_time} seconds")
-
+        while time.monotonic() < deadline:
             try:
-                r = requests.get(health_url, timeout=min(10, max(1, remaining)))
-                if r.status_code == 200:
-                    self._log("✅ Server is ready! (/health returned 200)")
-                    return
+                assert requests.get(url, timeout=5).status_code == 200
+                return self._log("✅ Server is ready!")
+            except Exception:
+                self._log(f"⏳ Waiting for server via {url} ...")
+            time.sleep(interval)
 
-                status = "Loading model" if r.status_code == 503 else f"HTTP {r.status_code}"
-            except requests.RequestException as e:
-                status = f"network error: {e}"
-
-            # log only on status change or periodic heartbeat
-            now = time.monotonic()
-            if status != last_status or (now - last_heartbeat) >= HEARTBEAT_EVERY:
-                elapsed = int(max_wait_time - remaining)
-                self._log(f"⏳ {status}... ({elapsed}s elapsed)")
-                last_status = status
-                last_heartbeat = now
-
-            time.sleep(min(check_interval, max(0.1, deadline - time.monotonic())))
+        raise TimeoutError(f"Server not ready within {max_wait_time}s")
 
     def shutdown_server(self) -> None:
         """Shutdown the llama-server process"""
@@ -179,7 +156,7 @@ class LlamaCppServerEmbeddingModel:
         
         return f"data:{mime_type};base64,{image_data}"
 
-    def _image_to_pixel_values(self, text: str, image: Union[str, Image.Image]) -> Tuple[str, List[int]]:
+    def _image_to_pixel_values(self, image: Union[str, Image.Image]) -> Tuple[str, List[int]]:
         """
         Convert image (path or PIL.Image) + text into Qwen2.5-VL pixel_values (patch embeddings),
         serialize them to raw float32 binary, and return (base64 string, [nx, ny, embd]).
@@ -196,9 +173,6 @@ class LlamaCppServerEmbeddingModel:
 
         pixel_values = inputs["pixel_values"].detach().cpu().numpy().astype("float32")  # (1, num_patches, embd)
         image_grid_thw = inputs["image_grid_thw"].detach().cpu().numpy().tolist() 
-
-        print(f"Created image patches (pixel values) with shape: {pixel_values.shape} ... \n")
-        print(pixel_values)
 
         num_patches, embd = pixel_values.shape[0], pixel_values.shape[1]
         _, nx, ny = image_grid_thw[0]
@@ -235,10 +209,10 @@ class LlamaCppServerEmbeddingModel:
             payload = {"content": processed_content}
             
             if item["image"] is not None:
+                # NOTE: uncomment these two lines if you want to use normal processing pipeline 
                 # data_url = self._image_to_data_url(item["image"])
-                b64_bin, shape = self._image_to_pixel_values(item["content"], item["image"])
-                
                 # payload["image"] = data_url
+                b64_bin, shape = self._image_to_pixel_values(item["content"])
                 payload["prebuilt_image"] = b64_bin
                 payload["prebuilt_image_shape"] = shape # type: ignore
             
@@ -248,7 +222,6 @@ class LlamaCppServerEmbeddingModel:
             embedding_data = response.json()
             raw_embedding = embedding_data["embedding"]
 
-            self._log(f"\n==========================")
             self._log(f"🧠 Item {i + 1} embedding response")
             self._log(f"🔍 Raw embedding shape: {np.array(raw_embedding).shape}")
             
