@@ -830,7 +830,6 @@ struct clip_graph {
         const int num_position_ids = n_pos * 4; // m-rope requires 4 dim per position
 
         const bool uses_precomputed_image = img.is_precomputed;
-        printf("build_qwen2vl: uses_precomputed_image = %s\n", uses_precomputed_image ? "true" : "false");
 
         norm_type norm_t = ctx->proj_type() == PROJECTOR_TYPE_QWEN25VL
             ? NORM_TYPE_RMS 
@@ -840,9 +839,6 @@ struct clip_graph {
 
         // Normal conv2d pipeline
         ggml_tensor * inp = nullptr;
-
-        printf("about to build patch_embeddings\n");
-
 
         if (uses_precomputed_image) {
 
@@ -854,8 +850,6 @@ struct clip_graph {
 
             ggml_tensor * inp_raw = build_inp_raw();
             cb(inp_raw, "inp_raw", -1);
-
-            printf("built inp_raw\n");
 
             ggml_tensor * inp_0 = ggml_conv_2d(ctx0, model.patch_embeddings_0, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
             GGML_ASSERT(img.nx % (patch_size * 2) == 0);
@@ -884,8 +878,6 @@ struct clip_graph {
             }
 
         }
-
-        printf("finalized building patch_embeddings\n");
 
         cb(inp, "patch_embeddings_final", -1);
 
@@ -1023,8 +1015,6 @@ struct clip_graph {
         cb(embeddings, "image_embeddings", -1);
 
         ggml_build_forward_expand(gf, embeddings);
-        
-        printf("build_qwen2vl: built graph successfully\n");
 
         return gf;
     }
@@ -1915,7 +1905,6 @@ private:
 
     ggml_tensor * build_inp_raw_precomputed() {
         ggml_tensor * inp_raw = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, img.p_dim, img.npx * img.npy);
-        printf("Building input with shape [%d, %d] (precomputed)\n", img.p_dim, img.npx * img.npy);
         ggml_set_name(inp_raw, "inp_raw");
         ggml_set_input(inp_raw);
         return inp_raw;
@@ -3359,7 +3348,6 @@ struct llava_uhd {
             res.grid_size       = clip_image_size{0, 0};
             res.padding_refined = true;
 
-            // TODO: fix this and remove logging after
             LOG_DBG("%s: using pinpoints for slicing\n", __func__);
             LOG_DBG("%s: original size: %d x %d, overview size: %d x %d, refined size: %d x %d\n",
                     __func__, original_width, original_height,
@@ -3634,77 +3622,6 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
 
         clip_image_f32_ptr img_f32(clip_image_f32_init());
         normalize_image_u8_to_f32(resized, *img_f32, params.image_mean, params.image_std);
-
-        // --- PATCH_EMBEDDING TEST (toy graph) ---
-        // {
-        //     auto & model = ctx->model;
-
-        //     // 1. Patchify input image (already normalized) into [patch_count, patch_vec_len]
-        //     size_t patch_count, patch_vec_len;
-        //     auto patches_vec = image_manipulation::patchify_qwen2vl(
-        //         *img_f32,
-        //         /*patch_size=*/14,
-        //         /*merge_size=*/2,
-        //         /*temporal_patch_size=*/2,
-        //         patch_count,
-        //         patch_vec_len
-        //     );
-
-        //     // TODO: get patch embeddings from request, patch_count and patch_vec_len (this is default)
-
-        //     // 2. Get the flat weights tensor from model (already F32 in export)
-        //     ggml_tensor *wflat = model.patch_embeddings_flat; // [n_embd, patch_vec_len]
-        //     GGML_ASSERT(wflat != nullptr);
-        //     GGML_ASSERT(wflat->type == GGML_TYPE_F32);
-
-        //     int64_t n_embd = wflat->ne[1]; // ne1 = output embedding dim
-        //     printf("WEIGHTS: ne0=%lld, ne1=%lld (expect ne0=%zu)\n",
-        //         (long long)wflat->ne[0], (long long)wflat->ne[1], patch_vec_len);
-        //     GGML_ASSERT((size_t)wflat->ne[0] == patch_vec_len);
-
-        //     // 3. Allocate a scratch GGML context for the test matmul
-        //     size_t bytes_needed =
-        //         patch_count * patch_vec_len +
-        //         patch_vec_len * n_embd +
-        //         patch_count * n_embd;
-
-        //     bytes_needed *= sizeof(float);
-
-        //     ggml_init_params ip_test = {};
-        //     ip_test.mem_size   = bytes_needed + 1000*1024;
-        //     ip_test.mem_buffer = malloc(ip_test.mem_size);
-        //     ip_test.no_alloc   = false;
-
-        //     ggml_context *ctx_test = ggml_init(ip_test);
-
-        //     // 4. Create GGML tensor for patches [patch_vec_len, patch_count]
-        //     ggml_tensor *t_patches = ggml_new_tensor_2d(ctx_test, GGML_TYPE_F32, patch_vec_len, patch_count);
-        //     memcpy(ggml_get_data_f32(t_patches), patches_vec.data(),
-        //         patch_vec_len * patch_count * sizeof(float));
-
-        //     // 5. Create GGML tensor for weights [patch_vec_len, n_embd]
-        //     ggml_tensor *t_wflat = ggml_new_tensor_2d(ctx_test, GGML_TYPE_F32, patch_vec_len, n_embd);
-        //     memcpy(ggml_get_data_f32(t_wflat), ggml_get_data_f32(wflat),
-        //         patch_vec_len * n_embd * sizeof(float));
-
-        //     // 6. Matmul -> output [n_embd, patch_count]
-        //     ggml_tensor *t_out = ggml_mul_mat(ctx_test, t_wflat, t_patches);
-
-        //     // 7. Build + run graph
-        //     ggml_cgraph *gf = ggml_new_graph(ctx_test);
-        //     ggml_build_forward_expand(gf, t_out);
-        //     ggml_graph_compute_with_ctx(ctx_test, gf, /*n_threads=*/1);
-
-        //     // 8. Log the output like Torch’s patch_embeddings_final
-        //     log_params_t lp = create_default_log_params();
-        //     log_to_file_or_console_parameterized(nullptr, t_patches, &lp);
-        //     log_to_file_or_console_parameterized(nullptr, t_wflat, &lp);
-        //     log_to_file_or_console_parameterized(nullptr, t_out, &lp);
-
-        //     // Cleanup
-        //     ggml_free(ctx_test);
-        //     free(ip_test.mem_buffer);
-        // }
 
         res_imgs->entries.push_back(std::move(img_f32));
         return true;
@@ -4392,7 +4309,6 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     if (ctx->debug_graph) {
         log_params_t params = create_default_log_params();
             
-        printf("Debugging graph with %zu tensors\n", ctx->debug_print_tensors.size());
         for (size_t i = 0; i < ctx->debug_print_tensors.size(); i++) {
             ggml_tensor * t = ctx->debug_print_tensors[i];
             if (!t->name) continue;
@@ -4421,18 +4337,6 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
             }
         }
     }
-
-    // print debug nodes
-    // if (ctx->debug_graph) {
-    //     LOG_INF("\n\n---\n\n");
-    //     LOG_INF("\n\nDebug graph:\n\n");
-    //     for (ggml_tensor * t : ctx->debug_print_tensors) {
-    //         std::vector<uint8_t> data(ggml_nbytes(t));
-    //         ggml_backend_tensor_get(t, data.data(), 0, ggml_nbytes(t));
-    //         print_tensor_shape(t);
-    //         print_tensor_data(t, data.data(), 3);
-    //     }
-    // }
 
     // the last node is the embedding tensor
     ggml_tensor * embeddings = ggml_graph_node(gf, -1);

@@ -3384,9 +3384,6 @@ struct server_context {
 
                     // check if we should process the image
                     if (slot.n_past < slot.n_prompt_tokens && slot.prompt_tokens[slot.n_past] == LLAMA_TOKEN_NULL) {
-                        printf("=== IMAGE PROCESSING DEBUG ===\n");
-                        printf("Before process_chunk: slot.n_past = %d, slot.n_prompt_tokens = %d\n", 
-                            slot.n_past, slot.n_prompt_tokens);
                         
                         // process the image
                         int32_t new_n_past;
@@ -3406,24 +3403,11 @@ struct server_context {
                                     break; // Stop at first nullptr
                                 }
                             }
-
-                            // for (int batch_pos = 0; batch_pos < 512; batch_pos++) { // reasonable upper bound
-                            //     const float * embd = llama_get_embeddings_ith(ctx, batch_pos);
-                            //     if (embd != nullptr) {
-                            //         slot.stored_image_embeddings.emplace_back(embd, embd + n_embd);
-                            //         image_embeddings_found++;
-                            //     } else {
-                            //         break; // Stop at first nullptr
-                            //     }
-                            // }
-                            
-                            printf("STORAGE: Captured %d image embeddings dynamically\n", batch_pos);
+                        
                             slot.has_stored_embeddings = true;
                         }
 
                         int32_t n_pos = new_n_past - slot.n_past;
-                        printf("process_chunk result: res = %d, old_n_past = %d, new_n_past = %d, n_pos = %d\n",
-                            res, slot.n_past, new_n_past, n_pos);
 
                         if (res != 0) {
                             SLT_ERR(slot, "failed to process image, res = %d\n", res);
@@ -3440,8 +3424,6 @@ struct server_context {
 
                         slot.n_past                    += n_pos;
                         slot.n_prompt_tokens_processed += n_pos;
-                        
-                        printf("=== IMAGE PROCESSING END ===\n");
                     }
 
                     // add prompt tokens for processing in the current batch
@@ -3541,10 +3523,6 @@ struct server_context {
                                     slot.stored_pre_image_embeddings.emplace_back(embd, embd + n_embd);
                                     pre_image_captured++;
                                 }
-                            }
-                            
-                            if (pre_image_captured > 0) {
-                                printf("PRE-IMAGE CAPTURE: Stored %d pre-image embeddings\n", pre_image_captured);
                             }
                         }
                     }

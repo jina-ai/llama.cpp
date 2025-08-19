@@ -1,7 +1,6 @@
 import base64
 import io
 import os
-import signal
 import subprocess
 import time
 from typing import List, Optional, Tuple, Union
@@ -106,15 +105,10 @@ class LlamaCppServerEmbeddingModel:
         raise TimeoutError(f"Server not ready within {max_wait_time}s")
 
     def shutdown_server(self) -> None:
-        """Shutdown the llama-server process"""
+        """Force kill the llama-server process"""
         if self.server_process:
-            self._log("Shutting down server...")
-            self.server_process.send_signal(signal.SIGINT)
-            try:
-                self.server_process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                self._log("Server did not shut down in time; killing process.")
-                self.server_process.kill()
+            self._log("Killing server...")
+            self.server_process.kill()
             self.server_process = None
 
     def __del__(self):

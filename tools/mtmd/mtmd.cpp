@@ -817,7 +817,6 @@ struct mtmd_tokenizer {
         }
 
         if (!ctx->img_beg.empty()) {
-            printf("Adding image begin token: %s\n", ctx->img_beg.c_str());
             add_text(ctx->img_beg, true);
         }
 
@@ -867,7 +866,6 @@ struct mtmd_tokenizer {
 
         // Optional "end of image" marker
         if (!ctx->img_end.empty()) {
-            printf("Adding image end token: %s\n", ctx->img_end.c_str());
             add_text(ctx->img_end, true);
         }
 
