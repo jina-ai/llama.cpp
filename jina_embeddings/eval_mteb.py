@@ -2,17 +2,17 @@ import logging
 from pathlib import Path
 from typing import List
 
-import click # type: ignore
-import mteb # type: ignore
-import numpy as np # type: ignore
-from tqdm import tqdm # type: ignore
-import torch # type: ignore
-from PIL import Image # type: ignore
+import click  # type: ignore
+import mteb  # type: ignore
+import numpy as np  # type: ignore
+import torch  # type: ignore
+from PIL import Image  # type: ignore
+from tqdm import tqdm  # type: ignore
 
-from mteb.encoder_interface import PromptType # type: ignore
-from mteb.model_meta import ModelMeta # type: ignore
+from mteb.encoder_interface import PromptType  # type: ignore
+from mteb.model_meta import ModelMeta  # type: ignore
 
-from model import LlamaCppServerEmbeddingModel, EmbeddingRequestItem
+from model import EmbeddingRequestItem, LlamaCppServerEmbeddingModel
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -58,20 +58,29 @@ class MTEBModelWrapper:
         self.document_prefix = document_prefix
         self.image_prefix = image_prefix
         self.batch_size = batch_size
-        logger.info(f"MTEB wrapper initialized. Batch size: {batch_size}")
+
+    def to_pil(self, image_data):
+        if isinstance(image_data, Image.Image):
+            return image_data.convert("RGB")
+
+        if isinstance(image_data, torch.Tensor):
+            t = image_data
+            # conver to HWC from CHW
+            arr = t.permute(1, 2, 0).numpy()
+            return Image.fromarray(arr).convert("RGB")
+
+        raise TypeError(f"Unsupported image type: {type(image_data)}")
 
     def encode(
         self,
         sentences: List[str],
         task_name: str,
         prompt_type=None,
-        **kwargs,
+        **_,
     ) -> np.ndarray:
         """
         Encode text sentences for MTEB tasks
         """
-
-        raise NotImplementedError("MTEBModelWrapper should use get_text_embeddings or get_image_embeddings.")
 
         is_query = prompt_type == PromptType.query
         prefix = self.query_prefix if is_query else self.document_prefix
@@ -85,14 +94,16 @@ class MTEBModelWrapper:
         
         with tqdm(total=len(sentences), desc=f"Encoding {task_name}", unit="sent") as pbar:
             for batch_idx in range(0, len(processed_sentences), self.batch_size):
+
                 batch_sentences = processed_sentences[batch_idx:batch_idx + self.batch_size]
-                
-                # Create EmbeddingRequestItems for the batch
-                batch_items = []
-                for sentence in batch_sentences:
-                    item: EmbeddingRequestItem = {"content": sentence, "image": None}
-                    batch_items.append(item)
-                
+
+                batch_items = [
+                    EmbeddingRequestItem(
+                        content=sent, 
+                        image=None
+                    ) for sent in batch_sentences
+                ]
+
                 # Encode the batch using the embedding model
                 batch_embeddings = self.embedding_model.encode(batch_items)
                 all_embeddings.extend(batch_embeddings)
@@ -101,64 +112,37 @@ class MTEBModelWrapper:
         logger.info("Text encoding done.")
         return np.array(all_embeddings)
 
-    def to_pil(self, image_data):
-        # Case 1: Already PIL
-        if isinstance(image_data, Image.Image):
-            return image_data.convert("RGB")
-
-        # Case 2: Torch tensor (CHW or HWC)
-        if isinstance(image_data, torch.Tensor):
-            t = image_data
-            if t.ndim == 3 and t.shape[0] in (1, 3, 4):  # CHW
-                t = t.permute(1, 2, 0)  # HWC
-            arr = t.numpy()
-            return Image.fromarray(arr).convert("RGB")
-
-        raise TypeError(f"Unsupported image type: {type(image_data)}")
-
     def get_image_embeddings(
         self,
         images,
-        **kwargs,
+        **_,
     ) -> np.ndarray:
         """
         Encode images for MTEB image tasks
         """
         
-        # Handle DataLoader vs list
-        if hasattr(images, '__iter__') and not isinstance(images, list):
-            # DataLoader yields batches, so we need to flatten them
-            images_list = []
-            for batch in images:
-                if isinstance(batch, list):
-                    images_list.extend(batch)
-                else:
-                    images_list.append(batch)
-        else:
-            images_list = images
+        # NOTE: DataLoader yields batches, so we need to flatten them
+        images_list = []
+        for batch in images:
+            if isinstance(batch, list):
+                images_list.extend(batch)
+            else:
+                images_list.append(batch)
             
         logger.info(f"Encoding {len(images_list)} images")
 
-        # Process in batches with progress bar
         all_embeddings = []
-        
         with tqdm(total=len(images_list), desc="Encoding images", unit="img") as pbar:
             for batch_idx in range(0, len(images_list), self.batch_size):
                 batch_images = images_list[batch_idx:batch_idx + self.batch_size]
                 
-                # Create EmbeddingRequestItems for the batch with image prefix
-                batch_items = []
-                for image in batch_images:
-                    # Convert tensor to PIL if needed
-                    valid_image = self.to_pil(image)
-                    
-                    item: EmbeddingRequestItem = {
-                        "content": self.image_prefix,
-                        "image": valid_image
-                    }
-                    batch_items.append(item)
+                batch_items = [
+                    EmbeddingRequestItem(
+                        content=self.image_prefix, 
+                        image=self.to_pil(image)
+                    ) for image in batch_images
+                ]
                 
-                # Encode the batch using the embedding model
                 try:
                     batch_embeddings = self.embedding_model.encode(batch_items)
                     all_embeddings.extend(batch_embeddings)
@@ -174,15 +158,16 @@ class MTEBModelWrapper:
     def get_text_embeddings(
         self,
         texts: List[str],
-        **kwargs,
+        **_,
     ) -> np.ndarray:
         """
-        Get text embeddings (same as encode but with document prefix by default)
+        Get text embeddings (same as encode but with query prefix by default)
         """
         logger.info(f"Encoding {len(texts)} text embeddings")
         
         # Apply document prefix to texts
         processed_texts = [self.query_prefix + text for text in texts]
+        logger.info(f"First 100 characters of processed text: {processed_texts[0][:100]}")
 
         # Process in batches with progress bar
         all_embeddings = []
@@ -211,64 +196,6 @@ class MTEBModelWrapper:
 
         logger.info("Text embeddings done.")
         return np.array(all_embeddings)
-
-    def get_fused_embeddings(
-        self,
-        texts: List[str] = None, # type: ignore
-        images: List = None, # type: ignore
-        **kwargs,
-    ) -> np.ndarray:
-        """
-        Get fused text+image embeddings for multimodal tasks
-        """
-
-        if texts is None or images is None:
-            raise ValueError("Both texts and images must be provided for fused embeddings")
-        
-        if len(texts) != len(images):
-            raise ValueError("Number of texts and images must match")
-
-        logger.info(f"Encoding {len(texts)} fused text+image embeddings")
-
-        # Process in batches with progress bar
-        all_embeddings = []
-        
-        with tqdm(total=len(texts), desc="Encoding fused embeddings", unit="pair") as pbar:
-            for batch_idx in range(0, len(texts), self.batch_size):
-                batch_texts = texts[batch_idx:batch_idx + self.batch_size]
-                batch_images = images[batch_idx:batch_idx + self.batch_size]
-                
-                # Create TWO SEPARATE EmbeddingRequestItems for each pair
-                batch_items = []
-                for text, image in zip(batch_texts, batch_images):
-                    # Text item
-                    text_item: EmbeddingRequestItem = {
-                        "content": self.query_prefix + text,
-                        "image": None
-                    }
-                    batch_items.append(text_item)
-                    
-                    # Image item  
-                    image_item: EmbeddingRequestItem = {
-                        "content": self.image_prefix,
-                        "image": image
-                    }
-                    batch_items.append(image_item)
-                
-                # Encode the batch using the embedding model
-                try:
-                    print("\n\n\n\n 🔗 Fused embeddings requested. Processing text and image pairs...")
-                    print("\n\n\n\n 🔗 Fused embeddings requested. Processing text and image pairs...")
-                    batch_embeddings = self.embedding_model.encode(batch_items)
-                    all_embeddings.extend(batch_embeddings)
-                    pbar.update(len(batch_texts))
-                except Exception as e:
-                    logger.error(f"Fused batch encoding failed: {e}")
-                    raise
-
-        logger.info("Fused embeddings done.")
-        return np.array(all_embeddings)
-
 
 @click.command()
 @click.option('--llama-bin', required=True, help='Path to llama-server binary')

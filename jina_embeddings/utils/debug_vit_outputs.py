@@ -1,23 +1,23 @@
-# debug_vit_outputs.py
 import sys
 import os
 
-# Ensure vit_debugger.py is importable before anything else
+# Ensure vit_debugger.py is imported before anything else
 sys.path.append(os.path.join(os.path.dirname(__file__)))
 from vit_debugger import vit_debugger, LogParams
 
+import click  # type: ignore
 import torch  # type: ignore
+
 from transformers import Qwen2_5_VLForConditionalGeneration, Qwen2_5_VLProcessor  # type: ignore
+
 from qwen_vl_utils import process_vision_info  # type: ignore
+
 
 def setup_hooks(model, max_layers: int = 32):
     """Set up hooks to capture intermediate tensors."""
     vision_model = getattr(model, 'visual', None)
     if vision_model is None or not hasattr(vision_model, 'blocks'):
-        print("ERROR: Cannot find vision model with 'blocks'")
-        return
-
-    print(f"Found {len(vision_model.blocks)} vision blocks")
+        raise ValueError("Model does not have a 'visual' attribute with 'blocks'. Please check the model structure.")
 
     # Patch embedding hook
     if hasattr(vision_model, 'patch_embed'):
@@ -25,10 +25,9 @@ def setup_hooks(model, max_layers: int = 32):
             if isinstance(input, tuple) and len(input) > 0:
                 vit_debugger.capture_and_store("input_raw", input[0], log=False)
             vit_debugger.capture_and_store("patch_embeddings_final", output, log=False)
-            vit_debugger.save_tensor_binary(output, "/home/andrei/workspace/qwen25vl_patch_embeddings.bin")
             return output
         vision_model.patch_embed.register_forward_hook(patch_embed_hook)
-        print("✅ Added patch embedding hook with binary save")
+        print("✅ Added patch embedding hook")
 
     # Input to layers hook
     def input_to_layers_hook(module, input, output):
@@ -62,38 +61,34 @@ def setup_hooks(model, max_layers: int = 32):
     # Final ViT output
     def final_vit_hook(module, input, output):
         vit_debugger.capture_and_store("vit_final_embeddings", output, log=False)
-        # vit_debugger.save_tensor_binary(output, "/home/andrei/workspace/qwen25vl_final_vit_embeddings.bin")
         return output
     
     vision_model.register_forward_hook(final_vit_hook)
     print("✅ Added final ViT embeddings hook")
 
 
-def main():
-    print("=" * 80)
-    print("VIT DEBUGGER - USING ORIGINAL QWEN PROCESSING")
-    print("=" * 80)
-
-    model_name = "/home/andrei/workspace/jev4-retrieval"
-    image_path = "/home/andrei/workspace/dog.jpg"
-    output_file = "/home/andrei/workspace/qwen25_pytorch_vit_output.txt"
-    max_layers = 32
-
+@click.command()
+@click.option("--model-name", required=True, type=str, help="Path to the model directory.")
+@click.option("--image-path", required=True, type=str, help="Path to the input image.")
+@click.option("--output-file", required=True, type=str, help="Path to save the ViT debugger outputs.")
+@click.option("--max-layers", default=32, type=int, show_default=True, help="Maximum number of layers to hook.")
+def main(model_name, image_path, output_file, max_layers):
     # Configure debugger
     log_params = LogParams(start_patch=0, num_patches=5, start_head=0, num_heads=5, start_dim=0, num_dims=10)
     vit_debugger.log_file = output_file
     vit_debugger.params = log_params
 
-    print("STEP 1: Loading model and processor...")
+    print("Loading model and processor...")
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         model_name, torch_dtype=torch.bfloat16, device_map="auto"
     )
+
     processor = Qwen2_5_VLProcessor.from_pretrained(model_name)
 
-    print("STEP 2: Setting up hooks...")
+    print("Setting up hooks...")
     setup_hooks(model, max_layers)
 
-    print("STEP 3: Processing image...")
+    print("Processing image...")
     messages = [{
         "role": "user",
         "content": [
@@ -108,15 +103,15 @@ def main():
         text=[text], images=image_inputs, videos=video_inputs, padding=True, return_tensors="pt"
     ).to("cuda")
 
-    print("\nSTEP 4: Running inference...")
+    print("Running inference...")
     with torch.no_grad():
         model(**inputs)
     print("✅ Inference completed")
 
-    print("\nSTEP 5: Saving outputs...")
+    print("Saving outputs...")
     vit_debugger.save_outputs()
     print(f"✅ Outputs saved to {output_file}")
 
 
 if __name__ == "__main__":
-    main()
+    main() # type: ignore

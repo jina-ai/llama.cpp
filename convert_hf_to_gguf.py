@@ -31,23 +31,6 @@ import gguf
 
 logger = logging.getLogger("hf-to-gguf")
 
-
-def save_embeddings_binary_env(tensor: torch.Tensor, filename: str):
-    """Save tensor as float32 .bin to dir from QWEN_EXPORT_BIN_DIR env; skip if unset."""
-    export_dir = os.environ.get("QWEN_EXPORT_BIN_DIR")
-    if not export_dir:
-        print(f"⚠️ Skipping export of '{filename}' (QWEN_EXPORT_BIN_DIR not set)")
-        return
-    os.makedirs(export_dir, exist_ok=True)
-    path = os.path.join(export_dir, filename)
-
-    t_f32 = tensor.float().contiguous().cpu().numpy().astype(np.float32)
-    print(f"💾 Saving: {t_f32.shape} -> {path}")
-    print(f"   First 10 vals: {t_f32.flatten()[:10]}")
-    t_f32.tofile(path)
-    print(f"✅ Wrote {t_f32.size} float32 values to {path}")
-
-
 ###### MODEL DEFINITIONS ######
 
 class SentencePieceTokenTypes(IntEnum):
@@ -3080,11 +3063,6 @@ class Qwen2VLVisionModel(MmprojModel):
             return gguf.GGMLQuantizationType.F32
         if ".position_embd." in new_name:
             return gguf.GGMLQuantizationType.F32
-        # NOTE: forcing to F32 required in order to be able to patch weights after export
-        # if "mm.0.w" in new_name or "mm.2.w" in new_name:
-        #     # mm.0.w and mm.1.w are the weights of the final linear layers
-        #     # in Qwen2_5_VL, they are quantized to F32
-        #     return gguf.GGMLQuantizationType.F16
         return False
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
@@ -3108,22 +3086,6 @@ class Qwen2VLVisionModel(MmprojModel):
                     (self.map_tensor_name(name.replace("qkv", "v")), wv),
                 ]
             
-            # elif 'patch_embed.proj.weight' in name:
-            #     # split Conv3D into Conv2Ds
-            #     c1, c2, kt, kh, kw = data_torch.shape
-            #     # del c1, c2, kh, kw  # unused
-            #     assert kt == 2, "Current implmentation only support temporal_patch_size of 2"
-            #     return [
-            #         # Original 2D-sliced export
-            #         (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight",
-            #         data_torch[:, :, 0, ...]),
-            #         (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight.1",
-            #         data_torch[:, :, 1, ...]),
-            #         # Flat weight for matmul path
-            #         (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight_flat",
-            #         data_torch.view(c1, -1).contiguous())
-            #     ]
-            
             elif 'patch_embed.proj.weight' in name:
                 # Conv3D: [out=embed_dim, in=3, kT=2, kH=14, kW=14]
                 c1, c2, kt, kh, kw = data_torch.shape
@@ -3144,22 +3106,7 @@ class Qwen2VLVisionModel(MmprojModel):
                     W_flat)
                 )
 
-                # OPTIONAL: dump .bin files for patcher (env-driven; no globals)
-                save_embeddings_binary_env(W_flat,           "q25vl_patch_flat.bin")
-                save_embeddings_binary_env(data_torch[:, :, 0, ...], "q25vl_patch_t0.bin")
-                save_embeddings_binary_env(data_torch[:, :, 1, ...], "q25vl_patch_t1.bin")
-
                 return outputs
-
-            
-            # NOTE: there seems to be no bias, skip that
-            # elif 'patch_embed.proj.bias' in name:
-            #     # Export flat bias directly
-            #     return [
-            #         (self.map_tensor_name(name), data_torch),
-            #         (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".bias_flat",
-            #         data_torch)
-            #     ]
             
             else:
 

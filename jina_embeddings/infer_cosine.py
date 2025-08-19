@@ -23,30 +23,30 @@ def parse_line(
     image_prefix: str = "<__image__>"
 ) -> Tuple[str, EmbeddingRequestItem]:
     """Parse input line and return (original_content, EmbeddingRequestItem)"""
+
     if line.startswith('[QUERY] '):
         content = line[8:]  # Remove '[QUERY] '
-        item: EmbeddingRequestItem = { 
-            "content": query_prefix + content, 
-            "image": None 
-        }
-        return content, item
+        return content, EmbeddingRequestItem(
+            content=query_prefix + content, 
+            image=None
+        )
+    
     elif line.startswith('[DOCUMENT] '):
         content = line[11:]  # Remove '[DOCUMENT] '
-        item: EmbeddingRequestItem = { 
-            "content": document_prefix + content, 
-            "image": None 
-        }
-        return content, item
+        return content, EmbeddingRequestItem(
+            content=document_prefix + content, 
+            image=None
+        )
+    
     elif line.startswith('[IMAGE] '):
         image_path = line[8:]  # Remove '[IMAGE] '
         pil_image = Image.open(image_path)
-        item: EmbeddingRequestItem = { 
-            "content": image_prefix, 
-            "image": pil_image 
-        }
-        return image_path, item
-    else:
-        raise ValueError(f"Invalid line format: {line}. Expected '[QUERY] ', '[DOCUMENT] ', or '[IMAGE] ' prefix.")
+        return image_path, EmbeddingRequestItem(
+            content=image_prefix,
+            image=pil_image
+        )
+    
+    raise ValueError(f"Invalid line format: {line}. Expected '[QUERY] ', '[DOCUMENT] ', or '[IMAGE] ' prefix.")
 
 
 def save_cosine_similarity_matrix(raw_lines: List[str], embeddings: np.ndarray, save_path: str) -> None:
