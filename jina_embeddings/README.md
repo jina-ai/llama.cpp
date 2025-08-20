@@ -23,7 +23,7 @@ You can donwload model files and mmproj like so:
 ```
 cd llama.cpp
 huggingface-cli download jinaai/jina-embeddings-v4-text-retrieval-GGUF --include jina-embeddings-v4-text-retrieval-F16.gguf --local-dir gguf-models
-huggingface-cli download jinaai/jina-embeddings-v4-text-retrieval-GGUF --include mmproj-jina-embeddings-v4-retrieval-BF16.gguf --local-dir gguf-models
+huggingface-cli download jinaai/jina-embeddings-v4-text-retrieval-GGUF --include mmproj-jina-embeddings-v4-retrieval-F16.gguf --local-dir gguf-models
 ```
 
 ```bash
@@ -31,7 +31,7 @@ cd llama.cpp
 python jina_embeddings/eval_mteb.py \
 	--llama-bin build/bin/llama-server \
 	--model "$PWD/gguf-models/jina-embeddings-v4-text-retrieval-F16.gguf" \
-	--mmproj "$PWD/gguf-models/mmproj-jina-embeddings-v4-retrieval-BF16.gguf" \
+	--mmproj "$PWD/gguf-models/mmproj-jina-embeddings-v4-retrieval-F16.gguf" \
 	--tasks VidoreSyntheticDocQAEnergyRetrieval \
 	--output-dir jev4-gguf-vidore \
 	--gpus 0 \
@@ -52,7 +52,7 @@ cd llama.cpp
 python jina_embeddings/infer_cosine.py   \
     --llama-bin llama.cpp/build/bin/llama-server   \
 	--model gguf-models/jev4-bf16.gguf \
-    --mmproj gguf-models/mmproj-jina-embeddings-v4-retrieval-BF16.gguf \
+    --mmproj gguf-models/mmproj-jina-embeddings-v4-retrieval-F16.gguf \
     --gpus 0 \
     --input jina_embeddings/assets/test_data.txt   \
     --output jev4_cosine_results.md   \
@@ -66,16 +66,14 @@ python jina_embeddings/infer_cosine.py   \
 ```bash
 huggingface-cli download jinaai/jev4-retrieval --local-dir jev4-retrieval
 
+mkdir gguf-models
+
 python convert_hf_to_gguf.py jev4-retrieval \
-    --outfile gguf-models/jina-embeddings-v4-text-retrieval-BF16.gguf \
-    --outtype bf16 
+    --outfile gguf-models/jina-embeddings-v4-text-retrieval-F16.gguf \
+    --outtype f16 
 
-python convert_hf_to_gguf.py /Users/andrei/Downloads/jev4-retrieval \
-    --outfile gguf-models/jina-embeddings-v4-text-retrieval-BF16.gguf \
-    --outtype bf16 \
+python convert_hf_to_gguf.py jev4-retrieval \
+    --outfile gguf-models/jina-embeddings-v4-text-retrieval-F16.gguf \
+    --outtype f16 \
     --mmproj
-
-python jina_embeddings/utils/export_torch_weights.py /Users/andrei/Downloads/jev4-retrieval /Users/andrei/Documents/gguf
-
-python jina_embeddings/utils/patch_gguf.py
 ```

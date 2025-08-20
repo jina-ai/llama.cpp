@@ -1016,7 +1016,6 @@ int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) 
                 ctx->image_embd_v.data() + i*n_mmproj_embd*n_tokens_per_image);
         }
     } else {
-        printf("mtmd_encode: using batch encoding for %zu images\n", image_tokens->batch_f32.entries.size());
         ok = clip_image_batch_encode(
             ctx_clip,
             ctx->n_threads,

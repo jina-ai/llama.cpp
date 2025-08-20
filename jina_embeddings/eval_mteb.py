@@ -142,8 +142,6 @@ class MTEBModelWrapper:
                         image=self.to_pil(image)
                     ) for image in batch_images
                 ]
-                
-                print(batch_items[0])
 
                 try:
                     batch_embeddings = self.embedding_model.encode(batch_items)

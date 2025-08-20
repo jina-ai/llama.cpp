@@ -2665,7 +2665,7 @@ struct server_context {
                 embeddings_found++;
             }
         }
-        
+
         queue_results.send(std::move(res));
     }
 
@@ -3336,8 +3336,6 @@ struct server_context {
                         // there is no common part left
                         slot.n_past = 0;
                     }
-
-                    SLT_INF(slot, "kv cache rm [%d, end)\n", slot.n_past);
 
                     // remove the non-common part from the cache
                     slot.cache_tokens.keep_first(slot.n_past);
