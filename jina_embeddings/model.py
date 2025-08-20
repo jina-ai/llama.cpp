@@ -202,8 +202,8 @@ class LlamaCppServerEmbeddingModel:
             processed_content = self._process_content(item["content"])
             payload = {"content": processed_content}
 
-            if item["image"] is not None:
-                print(item)
+            # if item["image"] is not None:
+            #     print(item)
             
             if item["image"] is not None:
                 # NOTE: uncomment these two lines if you want to use normal processing pipeline 
