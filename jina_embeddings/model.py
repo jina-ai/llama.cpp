@@ -151,7 +151,7 @@ class LlamaCppServerEmbeddingModel:
         
         return f"data:{mime_type};base64,{image_data}"
 
-    def _image_to_pixel_values(self, image: Union[str, Image.Image]) -> Tuple[np.array, List[int]]:
+    def _image_to_pixel_values(self, image: Union[str, Image.Image]) -> Tuple[str, List[int]]:
         """
         Convert image (path or PIL.Image) + text into Qwen2.5-VL pixel_values (patch embeddings),
         serialize them to raw float32 binary, and return (base64 string, [nx, ny, embd]).
@@ -173,7 +173,10 @@ class LlamaCppServerEmbeddingModel:
         _, nx, ny = image_grid_thw[0]
 
         assert num_patches == nx * ny, f"Expected {nx}x{ny} patches, got {num_patches} patches"
-        return pixel_values, [nx, ny, embd]
+    
+        buf = pixel_values.tobytes(order="C")
+        b64_data = base64.b64encode(buf).decode("utf-8")
+        return b64_data, [nx, ny, embd]
 
     def _trim_text_with_tokenizer(self, text: str) -> str:
         """Trim text to max_text_length using the configured tokenizer"""
@@ -197,18 +200,12 @@ class LlamaCppServerEmbeddingModel:
         for i, item in tqdm(enumerate(items), total=len(items), desc="Encoding", unit="item"):
             processed_content = self._process_content(item["content"])
             payload = {"content": processed_content}
-
-            # if item["image"] is not None:
-            #     print(item)
             
             if item["image"] is not None:
                 # NOTE: uncomment these two lines if you want to use normal processing pipeline 
                 # data_url = self._image_to_data_url(item["image"])
                 # payload["image"] = data_url
-                pixel_values, shape = self._image_to_pixel_values(item["image"])
-                buf = pixel_values.tobytes(order="C")
-                b64_data = base64.b64encode(buf).decode("utf-8")
-
+                b64_data, shape = self._image_to_pixel_values(item["image"])
                 payload["prebuilt_image"] = b64_data
                 payload["prebuilt_image_shape"] = shape # type: ignore
             
@@ -227,21 +224,7 @@ class LlamaCppServerEmbeddingModel:
                 start_idx = embedding_data["start_image_token_idx"]
                 end_idx = embedding_data["end_image_token_idx"]    
                 image_embeddings = embedding_array[start_idx-1:end_idx+2]  
-                try:
-                    pooled = image_embeddings.mean(axis=0)
-                except Exception as e:
-                    print(f"Error pooling image embeddings: {e}")
-                    # convert PIL -> tensor for logging
-                    # list(image.getdata())
-                    image = item['image']
-                    image_data = torch.as_tensor(list(image.getdata()), dtype=torch.float32)
-                    image_embeddings = torch.as_tensor(image_embeddings, dtype=torch.float32)
-                    print(f"Image data shape: {tuple(image_data.shape)}")
-                    print(f"NaN in image embeddings: {torch.isnan(image_embeddings).any().item()}")
-                    print(f"NaN in pixel values: {torch.isnan(image_data).any().item()}")
-                    print(image_embeddings)
-                    continue
-
+                pooled = image_embeddings.mean(axis=0)
                 self._log(f"🖼️ Extracted image embeddings shape: {image_embeddings.shape}")
                 self._log(f"🖼️ Image token indices: start={start_idx}, end={end_idx}")
                 self._log(f"🖼️ Image embeddings extracted: {len(image_embeddings)}")
