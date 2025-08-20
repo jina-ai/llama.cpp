@@ -73,7 +73,7 @@ python convert_hf_to_gguf.py jev4-retrieval \
     --outtype f16 
 
 python convert_hf_to_gguf.py jev4-retrieval \
-    --outfile gguf-models/jina-embeddings-v4-text-retrieval-F16.gguf \
+    --outfile gguf-models/jina-embeddings-v4-F16.gguf \
     --outtype f16 \
     --mmproj
 ```

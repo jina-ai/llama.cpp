@@ -201,6 +201,9 @@ class LlamaCppServerEmbeddingModel:
         for i, item in tqdm(enumerate(items), total=len(items), desc="Encoding", unit="item"):
             processed_content = self._process_content(item["content"])
             payload = {"content": processed_content}
+
+            if item["image"] is not None:
+                print(item)
             
             if item["image"] is not None:
                 # NOTE: uncomment these two lines if you want to use normal processing pipeline 
@@ -224,15 +227,13 @@ class LlamaCppServerEmbeddingModel:
             if is_image_request:
                 start_idx = embedding_data["start_image_token_idx"]
                 end_idx = embedding_data["end_image_token_idx"]    
-                hidden_states = embedding_array
-                image_embeddings = hidden_states[start_idx-1:end_idx+2]  
+                image_embeddings = embedding_array[start_idx-1:end_idx+2]  
                 pooled = image_embeddings.mean(axis=0)
                 self._log(f"🖼️ Extracted image embeddings shape: {image_embeddings.shape}")
                 self._log(f"🖼️ Image token indices: start={start_idx}, end={end_idx}")
                 self._log(f"🖼️ Image embeddings extracted: {len(image_embeddings)}")
             else:
-                hidden_states = embedding_array
-                pooled = hidden_states.mean(axis=0)
+                pooled = embedding_array.mean(axis=0)
 
             if self.normalize:
                 norm = np.linalg.norm(pooled)

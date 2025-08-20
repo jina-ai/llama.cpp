@@ -134,7 +134,7 @@ class MTEBModelWrapper:
         all_embeddings = []
         with tqdm(total=len(images_list), desc="Encoding images", unit="img") as pbar:
             for batch_idx in range(0, len(images_list), self.batch_size):
-                batch_images = images_list[batch_idx:batch_idx + self.batch_size]
+                batch_images = images_list[batch_idx : batch_idx + self.batch_size]
                 
                 batch_items = [
                     EmbeddingRequestItem(
