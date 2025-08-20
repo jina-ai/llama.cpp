@@ -3515,13 +3515,10 @@ struct server_context {
                         // Capture pre-image embeddings (only before image processing)
                         if (!slot.has_stored_embeddings) {
                             const int n_embd = llama_model_n_embd(model);
-                            int pre_image_captured = 0;
-                            
                             for (int batch_pos = 0; batch_pos < batch_view.n_tokens; batch_pos++) {
                                 const float * embd = llama_get_embeddings_ith(ctx, batch_pos);
                                 if (embd != nullptr) {
                                     slot.stored_pre_image_embeddings.emplace_back(embd, embd + n_embd);
-                                    pre_image_captured++;
                                 }
                             }
                         }

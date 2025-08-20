@@ -6,7 +6,7 @@ cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-9
 cmake --build build --config Release
 ```
 
-Compile without cURL - doing this on AIME/A1 because we don't have cURL installed. (NOT RECOMMENDED)
+Compile without cURL - doing this where we don't have cURL installed.
 ```bash
 cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-9 -DLLAMA_CURL=OFF
 cmake --build build --config Release
@@ -15,22 +15,25 @@ cmake --build build --config Release
 Compile on Mac (gpu).
 ```bash
 cmake -B build -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=Apple -DGGML_METAL=ON
-cmake --build build --config Release -j
+cmake --build build --config Release -j 
 ```
 
 # Mteb eval
-You can donwload the mmproj like so:
+You can donwload model files and mmproj like so:
 ```
-huggingface-cli download jinaai/jina-embeddings-v4-text-retrieval-GGUF --include mmproj-jina-embeddings-v4-retrieval-BF16.gguf --local-dir /home/andrei/workspace/gguf
+cd llama.cpp
+huggingface-cli download jinaai/jina-embeddings-v4-text-retrieval-GGUF --include jina-embeddings-v4-text-retrieval-F16.gguf --local-dir gguf-models
+huggingface-cli download jinaai/jina-embeddings-v4-text-retrieval-GGUF --include mmproj-jina-embeddings-v4-retrieval-BF16.gguf --local-dir gguf-models
 ```
 
 ```bash
-python eval_mteb.py \
-	--llama-bin /home/andrei/workspace/llama.cpp/build/bin/llama-server \
-	--model /home/andrei/workspace/gguf/jev4-bf16.gguf \
-	--mmproj /home/andrei/workspace/gguf/mmproj-jina-embeddings-v4-retrieval-BF16.gguf \
+cd llama.cpp
+python jina_embeddings/eval_mteb.py \
+	--llama-bin build/bin/llama-server \
+	--model "$PWD/gguf-models/jina-embeddings-v4-text-retrieval-F16.gguf" \
+	--mmproj "$PWD/gguf-models/mmproj-jina-embeddings-v4-retrieval-BF16.gguf" \
 	--tasks VidoreSyntheticDocQAEnergyRetrieval \
-	--output-dir /home/andrei/workspace/jev4-gguf-vidore-fixed \
+	--output-dir jev4-gguf-vidore \
 	--gpus 0 \
 	--no-logging \
 	--query-prefix "Query: " \
@@ -38,35 +41,21 @@ python eval_mteb.py \
 	--image-prefix '<|im_start|>user\n<__image__>Describe the image.<|im_end|>\n'
 ```
 
-Mteb script also supports Vidore task.
-To get the name of Vidore tasks, run:
+To get the name of all Vidore tasks, run:
 ```bash
 python -c "import mteb; tasks = mteb.get_tasks(); print([t.metadata.name for t in tasks if 'chart' in t.metadata.name.lower() or 'vidore' in t.metadata.name.lower()])"
 ```
 
 # Inference example
 ```bash
-python infer_cosine.py   \
-    --llama-bin /home/andrei/workspace/llama.cpp/build/bin/llama-server   \
-    --model /home/andrei/workspace/gguf/jev4-bf16.gguf   \
-    --mmproj /home/andrei/workspace/gguf/mmproj-jev4-bf16.gguf   \
-    --gpus 1   \
-    --input /home/andrei/workspace/test_data.txt   \
-    --output /home/andrei/workspace/jev4_mmtd.md   \
-    --query-prefix "Query: "   \
-    --document-prefix "Passage: "   \
-    --normalize
-```
-
-Use the fixed mmproj that has the flattened weights vector.
-```bash
-MTMD_DEBUG_GRAPH=1 \
+cd llama.cpp
 python jina_embeddings/infer_cosine.py   \
-    --llama-bin /Users/andrei/Documents/GitHub/jina-llama.cpp/build/bin/llama-server   \
-    --model /Users/andrei/Documents/gguf/jev4-bf16.gguf   \
-    --mmproj /Users/andrei/Documents/gguf/mmproj-jev4-bf16-fixed.gguf  \
-    --input /Users/andrei/Documents/GitHub/jina-llama.cpp/jina_embeddings/assets/test_data.txt  \
-    --output /Users/andrei/Documents/GitHub/jina-llama.cpp/jina_embeddings/temp/jev4_mmtd.md   \
+    --llama-bin llama.cpp/build/bin/llama-server   \
+	--model gguf-models/jev4-bf16.gguf \
+    --mmproj gguf-models/mmproj-jina-embeddings-v4-retrieval-BF16.gguf \
+    --gpus 0 \
+    --input jina_embeddings/assets/test_data.txt   \
+    --output jev4_cosine_results.md   \
     --query-prefix "Query: "   \
     --document-prefix "Passage: "   \
     --normalize
@@ -75,62 +64,18 @@ python jina_embeddings/infer_cosine.py   \
 # Conversion
 
 ```bash
-huggingface-cli download jinaai/jev4-retrieval --local-dir /Users/andrei/Downloads/jev4-retrieval
+huggingface-cli download jinaai/jev4-retrieval --local-dir jev4-retrieval
+
+python convert_hf_to_gguf.py jev4-retrieval \
+    --outfile gguf-models/jina-embeddings-v4-text-retrieval-BF16.gguf \
+    --outtype bf16 
 
 python convert_hf_to_gguf.py /Users/andrei/Downloads/jev4-retrieval \
+    --outfile gguf-models/jina-embeddings-v4-text-retrieval-BF16.gguf \
     --outtype bf16 \
-    --outfile /Users/andrei/Documents/gguf/jev4-bf16.gguf
-
-QWEN_EXPORT_BIN_DIR="/Users/andrei/Documents/gguf" \
-python convert_hf_to_gguf.py /Users/andrei/Downloads/jev4-retrieval \
-    --mmproj \
-    --outtype bf16 \
-    --outfile /Users/andrei/Documents/gguf/jev4-bf16.gguf \
-    --verbose
+    --mmproj
 
 python jina_embeddings/utils/export_torch_weights.py /Users/andrei/Downloads/jev4-retrieval /Users/andrei/Documents/gguf
 
 python jina_embeddings/utils/patch_gguf.py
 ```
-
-# Quantization
-
-## Build importance matrix data
-```bash
-python build_i_matrix_data.py \
-    -f /shared/datasets/text-embedding-training/en/triplets/msmarco-full \
-    -f /shared/datasets/text-embedding-training/en/triplets/nq-bge \
-    -f /shared/datasets/text-embedding-training/zh/triplets/mmarco-mined-from-pair-random \
-    -f /shared/datasets/text-embedding-training/de/triplets/hotpotqa \
-    -f /shared/datasets/text-embedding-training/en/triplets/nli-random \
-    -f /shared/datasets/text-embedding-training/ja/triplets/nli-random \
-    -f /shared/datasets/text-embedding-training/ar/triplets/nli-random \
-    -f /shared/datasets/text-embedding-training/fr/triplets/nli-random \
-    -f /shared/datasets/text-embedding-training/de/triplets/nli-random \
-    -f /shared/datasets/text-embedding-training/es/triplets/nli-random \
-    -f /shared/datasets/text-embedding-training/ru/triplets/nli-random \
-    -f /shared/datasets/text-embedding-training/zh/triplets/t2ranking-provided-hard \
-    -f /shared/datasets/text-embedding-training/en/triplets/fever-mixed \
-    -f /shared/datasets/text-embedding-training/zh/triplets/msmarco-bge \
-    -f /shared/datasets/text-embedding-training/en/triplets/hotpotqa-mixed \
-    -f /shared/datasets/text-embedding-training/zh/triplets/nli-lcqmc-random-v2 \
-    -f /shared/datasets/text-embedding-training/zh/triplets/cmedqa2-hard \
-    -f /shared/datasets/text-embedding-training/es/triplets/hotpotqa \
-    -f /shared/datasets/text-embedding-training/de/triplets/ger-da-lir-jina \
-    -f /shared/datasets/text-embedding-training/de/triplets/msmarco-bge \
-    -f /shared/datasets/text-embedding-training/es/triplets/msmarco-bge \
-    -f /shared/datasets/text-embedding-training/en/triplets/pubmedqa-bm25 \
-    -f /shared/datasets/text-embedding-training/en/triplets/fiqa-mixed \
-    -f /shared/datasets/text-embedding-training/ja/triplets/msmarco-full \
-    -f /shared/datasets/text-embedding-training/ar/triplets/msmarco-full \
-    -f /shared/datasets/text-embedding-training/ru/triplets/msmarco-full \
-    -f /shared/datasets/text-embedding-training/extra/mlqa-translate \
-    --left-prefix "" \
-    --right-prefix "" \
-    -s 150 \
-	--remove-stopwords \
-	--remove-punctuation \
-    --scramble-method light \
-    -o /home/andrei/workspace/retrieval_data_examples__wo_punct_stop_words.txt
-```
-

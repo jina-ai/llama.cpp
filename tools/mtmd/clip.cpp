@@ -4311,7 +4311,6 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
             
         for (size_t i = 0; i < ctx->debug_print_tensors.size(); i++) {
             ggml_tensor * t = ctx->debug_print_tensors[i];
-            if (!t->name) continue;
 
             // Apply name filter
             if (
@@ -4330,9 +4329,9 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 try {
                     log_to_file_or_console_parameterized(nullptr, t, &params);
                 } catch (const std::exception& e) {
-                    printf("ERROR logging tensor %s: %s\n", t->name ? t->name : "unknown", e.what());
+                    printf("ERROR logging tensor %s: %s\n", t->name, e.what());
                 } catch (...) {
-                    printf("UNKNOWN ERROR logging tensor %s\n", t->name ? t->name : "unknown");
+                    printf("UNKNOWN ERROR logging tensor %s\n", t->name);
                 }
             }
         }

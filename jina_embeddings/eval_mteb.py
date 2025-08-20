@@ -143,6 +143,8 @@ class MTEBModelWrapper:
                     ) for image in batch_images
                 ]
                 
+                print(batch_items[0])
+
                 try:
                     batch_embeddings = self.embedding_model.encode(batch_items)
                     all_embeddings.extend(batch_embeddings)

@@ -206,7 +206,7 @@ class LlamaCppServerEmbeddingModel:
                 # NOTE: uncomment these two lines if you want to use normal processing pipeline 
                 # data_url = self._image_to_data_url(item["image"])
                 # payload["image"] = data_url
-                b64_bin, shape = self._image_to_pixel_values(item["content"])
+                b64_bin, shape = self._image_to_pixel_values(item["image"])
                 payload["prebuilt_image"] = b64_bin
                 payload["prebuilt_image_shape"] = shape # type: ignore
             
