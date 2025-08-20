@@ -232,6 +232,7 @@ class LlamaCppServerEmbeddingModel:
                     pooled = image_embeddings.mean(axis=0)
                 except Exception as e:
                     print(f"Error pooling image embeddings: {e}")
+                    print(np.array(item["image"]))
                     print(image_embeddings)
                     continue
           
