@@ -1,0 +1,2 @@
+[QUERY] This is a cute dog.
+[IMAGE] jina_embeddings/assets/dog.jpg

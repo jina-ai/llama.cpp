@@ -88,6 +88,7 @@ enum error_type {
     ERROR_TYPE_NOT_SUPPORTED, // custom error
 };
 
+
 static bool server_task_type_need_embd(server_task_type task_type) {
     switch (task_type) {
         case SERVER_TASK_TYPE_EMBEDDING:
@@ -2601,10 +2602,6 @@ struct server_context {
     }
 
     void send_embedding(const server_slot & slot, const llama_batch & batch) {
-        printf("=== send_embedding DEBUG ===\n");
-        printf("batch.n_tokens = %d\n", batch.n_tokens);
-        printf("has_stored_embeddings = %s\n", slot.has_stored_embeddings ? "true" : "false");
-        
         auto res = std::make_unique<server_task_result_embd>();
         res->id        = slot.id_task;
         res->index     = slot.index;
@@ -2612,31 +2609,21 @@ struct server_context {
         res->oaicompat = slot.params.oaicompat;
 
         const int n_embd = llama_model_n_embd(model);
-        printf("n_embd = %d\n", n_embd);
-
         int pooling_type = llama_pooling_type(slot.ctx);
-        printf("pooling_type = %d (NONE=%d)\n", pooling_type, LLAMA_POOLING_TYPE_NONE);
 
         // Only support token-level embeddings - no pooling
         if (pooling_type != LLAMA_POOLING_TYPE_NONE) {
-            printf("ERROR: Pooling is not supported for embeddings\n");
-            printf("=== send_embedding END (ERROR) ===\n");
-            
-            // Send error response
             send_error(slot, "pooling is not supported for embeddings - use token-level embeddings only", ERROR_TYPE_SERVER);
             return;
         }
 
         if (slot.has_stored_embeddings) {
             // *** MULTIMODAL EMBEDDING ASSEMBLY ***
-            printf("ASSEMBLY: Multimodal embedding - combining all parts (token-level only)\n");
             
             // Part 1: Pre-image text embeddings
             for (const auto& pre_embd : slot.stored_pre_image_embeddings) {
                 res->embedding.push_back(pre_embd);
             }
-
-            printf("ASSEMBLY: Added %zu pre-image embeddings\n", slot.stored_pre_image_embeddings.size());
             
             // *** SET IMAGE START INDEX ***
             res->start_image_token_idx = slot.stored_pre_image_embeddings.size();
@@ -2645,65 +2632,39 @@ struct server_context {
             for (const auto& img_embd : slot.stored_image_embeddings) {
                 res->embedding.push_back(img_embd);
             }
-
-            printf("ASSEMBLY: Added %zu image embeddings\n", slot.stored_image_embeddings.size());
             
             // *** SET IMAGE END INDEX ***
             res->end_image_token_idx = slot.stored_pre_image_embeddings.size() + slot.stored_image_embeddings.size() - 1;
             
             // Part 3: Post-image text embeddings (current batch) - token-level only
-            printf("ASSEMBLY: Using token-level embeddings for post-image text\n");
             int post_image_embeddings = 0;
             
             for (int pos = 0; pos < batch.n_tokens; ++pos) {
                 const float * embd = llama_get_embeddings_ith(ctx, pos);
                 if (embd == nullptr) {
-                    printf("ERROR: Missing post-image embedding at batch pos %d\n", pos);
                     send_error(slot, "missing post-image embedding at position " + std::to_string(pos), ERROR_TYPE_SERVER);
                     return;
                 }
                 
                 res->embedding.emplace_back(embd, embd + n_embd);
                 post_image_embeddings++;
-                if (pos < 3) {
-                    printf("ASSEMBLY: Found post-image embedding at batch pos %d\n", pos);
-                }
             }
-            printf("ASSEMBLY: Added %d post-image embeddings from current batch\n", post_image_embeddings);
-            
-            printf("ASSEMBLY: Total multimodal embeddings: %zu (pre:%zu + img:%zu + post:%d)\n",
-                res->embedding.size(),
-                slot.stored_pre_image_embeddings.size(),
-                slot.stored_image_embeddings.size(),
-                post_image_embeddings);
-            
-            printf("ASSEMBLY: Image token indices: start=%d, end=%d\n", 
-                res->start_image_token_idx, res->end_image_token_idx);
 
         } else {
             // *** REGULAR TEXT-ONLY EMBEDDING - TOKEN-LEVEL ONLY ***
-            printf("ASSEMBLY: Text-only embedding - token-level only\n");
             
             int embeddings_found = 0;
             for (int pos = 0; pos < slot.n_past; ++pos) {
                 const float * embd = llama_get_embeddings_ith(ctx, pos);
                 if (embd == nullptr) {
-                    printf("ERROR: Missing text embedding at pos %d\n", pos);
                     send_error(slot, "missing text embedding at position " + std::to_string(pos), ERROR_TYPE_SERVER);
                     return;
                 }
                 
                 res->embedding.emplace_back(embd, embd + n_embd);
                 embeddings_found++;
-                if (pos < 3 || pos >= slot.n_past - 3) {
-                    printf("Found embedding at pos %d\n", pos);
-                }
             }
-            printf("Total embeddings found: %d out of %d positions\n", embeddings_found, slot.n_past);
         }
-
-        printf("Final embedding count: %zu\n", res->embedding.size());
-        printf("=== send_embedding END ===\n");
 
         queue_results.send(std::move(res));
     }
@@ -3376,16 +3337,11 @@ struct server_context {
                         slot.n_past = 0;
                     }
 
-                    SLT_INF(slot, "kv cache rm [%d, end)\n", slot.n_past);
-
                     // remove the non-common part from the cache
                     slot.cache_tokens.keep_first(slot.n_past);
 
                     // check if we should process the image
                     if (slot.n_past < slot.n_prompt_tokens && slot.prompt_tokens[slot.n_past] == LLAMA_TOKEN_NULL) {
-                        printf("=== IMAGE PROCESSING DEBUG ===\n");
-                        printf("Before process_chunk: slot.n_past = %d, slot.n_prompt_tokens = %d\n", 
-                            slot.n_past, slot.n_prompt_tokens);
                         
                         // process the image
                         int32_t new_n_past;
@@ -3394,26 +3350,22 @@ struct server_context {
                         // CAPTURE IMAGE EMBEDDINGS immediately after process_chunk()
                         if (res == 0 && slot.task_type == SERVER_TASK_TYPE_EMBEDDING) {
                             const int n_embd = llama_model_n_embd(model);
-                            int image_embeddings_found = 0;
-                            
-                            // TODO: don't use upper bound, use numnber of image embeddings in the chunk
-                            for (int batch_pos = 0; batch_pos < 512; batch_pos++) { // reasonable upper bound
+    
+                            int batch_pos = 0;
+                            while (true) {
                                 const float * embd = llama_get_embeddings_ith(ctx, batch_pos);
                                 if (embd != nullptr) {
                                     slot.stored_image_embeddings.emplace_back(embd, embd + n_embd);
-                                    image_embeddings_found++;
+                                    batch_pos++;
                                 } else {
                                     break; // Stop at first nullptr
                                 }
                             }
-                            
-                            printf("STORAGE: Captured %d image embeddings dynamically\n", image_embeddings_found);
+                        
                             slot.has_stored_embeddings = true;
                         }
 
                         int32_t n_pos = new_n_past - slot.n_past;
-                        printf("process_chunk result: res = %d, old_n_past = %d, new_n_past = %d, n_pos = %d\n",
-                            res, slot.n_past, new_n_past, n_pos);
 
                         if (res != 0) {
                             SLT_ERR(slot, "failed to process image, res = %d\n", res);
@@ -3430,8 +3382,6 @@ struct server_context {
 
                         slot.n_past                    += n_pos;
                         slot.n_prompt_tokens_processed += n_pos;
-                        
-                        printf("=== IMAGE PROCESSING END ===\n");
                     }
 
                     // add prompt tokens for processing in the current batch
@@ -3523,18 +3473,11 @@ struct server_context {
                         // Capture pre-image embeddings (only before image processing)
                         if (!slot.has_stored_embeddings) {
                             const int n_embd = llama_model_n_embd(model);
-                            int pre_image_captured = 0;
-                            
                             for (int batch_pos = 0; batch_pos < batch_view.n_tokens; batch_pos++) {
                                 const float * embd = llama_get_embeddings_ith(ctx, batch_pos);
                                 if (embd != nullptr) {
                                     slot.stored_pre_image_embeddings.emplace_back(embd, embd + n_embd);
-                                    pre_image_captured++;
                                 }
-                            }
-                            
-                            if (pre_image_captured > 0) {
-                                printf("PRE-IMAGE CAPTURE: Stored %d pre-image embeddings\n", pre_image_captured);
                             }
                         }
                     }
@@ -4704,32 +4647,71 @@ int main(int argc, char ** argv) {
     const auto handle_embeddings_impl = [&ctx_server, &res_error, &res_ok](
         const httplib::Request & req, 
         httplib::Response & res,
-        const std::vector<raw_buffer> & files,
-        oaicompat_type oaicompat) -> void {
-    
+        oaicompat_type oaicompat
+    ) -> void {
         const json data = json::parse(req.body);
         const auto & prompt = oaicompat ? data.at("prompt") : data.at("content");
-        
-        // Process files
+
+        raw_buffer file;                 // for raw image (decoded bitmap)
+
+        std::vector<std::vector<float>> prebuilt_images;        // float32 patch embeddings
+        std::vector<std::array<uint32_t, 3>> prebuilt_shapes;   // [ny, nx, embed_dim]
+
+        // Decode normal image if present
+        if (data.contains("image")) {
+            std::string image_data = data.at("image");
+            if (string_starts_with(image_data, "data:image/")) {
+                auto parts = string_split<std::string>(image_data, ',');
+                file = base64_decode(parts[1]);
+            }
+        }
+
+        // Decode prebuilt patch embeddings if present
+        if (data.contains("prebuilt_image")) {
+            std::string b64_bin = data.at("prebuilt_image");
+            raw_buffer bytes = base64_decode(b64_bin); // raw bytes (uint8_t)
+
+            if (bytes.size() % sizeof(float) != 0) {
+                throw std::runtime_error("prebuilt_image size is not a multiple of 4 (float32)");
+            }
+
+            // reinterpret as float32
+            size_t n_floats = bytes.size() / sizeof(float);
+            std::vector<float> floats(n_floats);
+            std::memcpy(floats.data(), bytes.data(), bytes.size());
+
+            prebuilt_images.push_back(std::move(floats));
+
+            // Parse shape = [ny, nx, embed_dim]
+            if (!data.contains("prebuilt_image_shape") || data.at("prebuilt_image_shape").size() != 3) {
+                throw std::runtime_error("Missing or invalid prebuilt_image_shape (need [ny,nx,embed_dim])");
+            }
+
+            uint32_t ny  = data.at("prebuilt_image_shape")[0].get<uint32_t>();
+            uint32_t nx  = data.at("prebuilt_image_shape")[1].get<uint32_t>();
+            uint32_t dim = data.at("prebuilt_image_shape")[2].get<uint32_t>();
+
+            prebuilt_shapes.push_back({ ny, nx, dim });
+        }
+
         mtmd::bitmaps bitmaps;
-        const bool has_mtmd = ctx_server.mctx != nullptr;
         
-        if (!has_mtmd && !files.empty()) {
+        const bool has_mtmd = ctx_server.mctx != nullptr;
+
+        if (!has_mtmd && (!file.empty() || !prebuilt_images.empty())) {
             throw std::runtime_error("This server does not support multimodal");
         }
-        
-        for (size_t i = 0; i < files.size(); i++) {
-            
-            mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_buf(ctx_server.mctx, files[i].data(), files[i].size()));
 
+        // Normal bitmap path
+        if (!file.empty()) {
+            mtmd::bitmap bmp(
+                mtmd_helper_bitmap_init_from_buf(ctx_server.mctx, file.data(), file.size())
+            );
             if (!bmp.ptr) {
-                throw std::runtime_error("Failed to load image or audio file");
+                throw std::runtime_error("Failed to load image file");
             }
-            
-            // LOGGING: Raw bitmap data
-            printf("EMBEDDINGS: Raw bitmap loaded - width: %d, height: %d\n", 
-                bmp.nx(), bmp.ny());
-            
+
+            printf("EMBEDDINGS: Raw bitmap loaded - width: %d, height: %d\n", bmp.nx(), bmp.ny());
             std::string hash = fnv_hash(bmp.data(), bmp.n_bytes());
             bmp.set_id(hash.c_str());
             bitmaps.entries.push_back(std::move(bmp));
@@ -4737,89 +4719,108 @@ int main(int argc, char ** argv) {
 
         // Process prompt
         std::vector<server_tokens> inputs;
-        
-        if (has_mtmd && !files.empty()) {
-            // multimodal tokenization
+
+        if (has_mtmd && (!bitmaps.entries.empty() || !prebuilt_images.empty())) {
             std::string prompt_str;
             if (prompt.is_string()) {
                 prompt_str = prompt.get<std::string>();
             } else {
                 prompt_str = prompt.dump();
             }
-            
-            
+
             mtmd_input_text inp_txt = {
                 prompt_str.c_str(),
                 /* add_special */   true,
                 /* parse_special */ true,
             };
             mtmd::input_chunks chunks(mtmd_input_chunks_init());
-            auto bitmaps_c_ptr = bitmaps.c_ptr();
-            
-            int32_t tokenized = mtmd_tokenize(ctx_server.mctx,
-                                            chunks.ptr.get(),
-                                            &inp_txt,
-                                            bitmaps_c_ptr.data(),
-                                            bitmaps_c_ptr.size());
-            
-            if (tokenized != 0) {
-                throw std::runtime_error("Failed to tokenize prompt");
+
+            if (!bitmaps.entries.empty()) {
+                auto bitmaps_c_ptr = bitmaps.c_ptr();
+                int32_t tokenized = mtmd_tokenize(
+                    ctx_server.mctx,
+                    chunks.ptr.get(),
+                    &inp_txt,
+                    bitmaps_c_ptr.data(),
+                    bitmaps_c_ptr.size()
+                );
+                if (tokenized != 0) {
+                    throw std::runtime_error("Failed to tokenize prompt (bitmap path)");
+                }
+
+            } else if (!prebuilt_images.empty()) {
+                
+                std::vector<const float*> img_ptrs;
+                std::vector<size_t>       img_sizes;
+
+                img_ptrs.reserve(prebuilt_images.size());
+                img_sizes.reserve(prebuilt_images.size());
+
+                for (auto & buf : prebuilt_images) {
+                    img_ptrs.push_back(buf.data());
+                    img_sizes.push_back(buf.size()); // number of floats
+                }
+
+                int32_t tokenized = mtmd_tokenize_prebuilt(
+                    ctx_server.mctx,
+                    chunks.ptr.get(),
+                    &inp_txt,
+                    img_ptrs.data(),                           // const float*[]
+                    img_sizes.data(),                          // size_t[] (#floats per buffer)
+                    img_ptrs.size(),
+                    reinterpret_cast<const uint32_t (*)[3]>(prebuilt_shapes.data()), // [ny,nx,dim]
+                    prebuilt_shapes.size()
+                );
+
+                if (tokenized != 0) {
+                    throw std::runtime_error("Failed to tokenize prompt (prebuilt path)");
+                }
             }
 
-            server_tokens tmp(chunks, true);    
+            server_tokens tmp(chunks, true);
             inputs.push_back(std::move(tmp));
-            
+
         } else {
-            // non-multimodal version
-            
-            auto tokenized_prompts = tokenize_input_prompts(ctx_server.vocab, prompt, true, true);
-            
-            for (size_t prompt_idx = 0; prompt_idx < tokenized_prompts.size(); prompt_idx++) {
-                auto & p = tokenized_prompts[prompt_idx];        
+            // Non-multimodal
+            auto tokenized_prompts = tokenize_input_prompts(
+                ctx_server.vocab, prompt, true, true
+            );
+            for (auto & p : tokenized_prompts) {
                 auto tmp = server_tokens(p, ctx_server.mctx != nullptr);
                 inputs.push_back(std::move(tmp));
             }
         }
-        
+
         // Create embedding tasks
         std::vector<server_task> tasks;
         std::unordered_set<int> task_ids;
-        
         tasks.reserve(inputs.size());
+
         for (size_t i = 0; i < inputs.size(); i++) {
-            server_task task = server_task(SERVER_TASK_TYPE_EMBEDDING);
-            
+            server_task task(SERVER_TASK_TYPE_EMBEDDING);
             task.id    = ctx_server.queue_tasks.get_new_id();
             task.index = i;
-            
-            task.prompt_tokens    = std::move(inputs[i]);
-            task.params           = server_task::params_from_json_cmpl(
-                    ctx_server.ctx,
-                    ctx_server.params_base,
-                    data);
+            task.prompt_tokens = std::move(inputs[i]);
+            task.params        = server_task::params_from_json_cmpl(
+                ctx_server.ctx,
+                ctx_server.params_base,
+                data
+            );
             task.id_selected_slot = json_value(data, "id_slot", -1);
-            
-            // OAI-compat
             task.params.oaicompat = oaicompat;
-            
             tasks.push_back(std::move(task));
         }
-        
+
         task_ids = server_task::get_list_id(tasks);
         ctx_server.queue_results.add_waiting_tasks(tasks);
         ctx_server.queue_tasks.post(std::move(tasks));
-        
-        // Wait for results
+
         ctx_server.receive_multi_results(task_ids, [&](std::vector<server_task_result_ptr> & results) {
             if (results.size() == 1) {
-                // single result
                 res_ok(res, results[0]->to_json());
             } else {
-                // multiple results (multitask)
                 json arr = json::array();
-                for (auto & res : results) {
-                    arr.push_back(res->to_json());
-                }
+                for (auto & r : results) arr.push_back(r->to_json());
                 res_ok(res, arr);
             }
         }, [&](const json & error_data) {
@@ -4832,27 +4833,11 @@ int main(int argc, char ** argv) {
     };
 
     const auto handle_embeddings = [&handle_embeddings_impl](const httplib::Request & req, httplib::Response & res) {
-        std::vector<raw_buffer> files;
-        
-        // Parse the request body here to extract images
-        const json body = json::parse(req.body);
-        
-        // Handle simple image field for non-OAI endpoint
-        if (body.contains("image")) {
-            std::string image_data = body.at("image");
-            if (string_starts_with(image_data, "data:image/")) {
-                auto parts = string_split<std::string>(image_data, ',');
-                auto decoded_data = base64_decode(parts[1]);
-                files.push_back(decoded_data);
-            }
-        }
-        
-        handle_embeddings_impl(req, res, files, OAICOMPAT_TYPE_NONE);
+        handle_embeddings_impl(req, res, OAICOMPAT_TYPE_NONE);
     };
 
     const auto handle_embeddings_oai = [&handle_embeddings_impl](const httplib::Request & req, httplib::Response & res) {
-        std::vector<raw_buffer> files; // dummy files
-        handle_embeddings_impl(req, res, files, OAICOMPAT_TYPE_EMBEDDING);
+        handle_embeddings_impl(req, res, OAICOMPAT_TYPE_EMBEDDING);
     };
 
     const auto handle_rerank = [&ctx_server, &res_error, &res_ok](const httplib::Request & req, httplib::Response & res) {

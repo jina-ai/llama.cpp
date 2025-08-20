@@ -1307,8 +1307,7 @@ void llama_kv_cache_unified::set_input_kq_mask(ggml_tensor * dst, const llama_ub
 
                 const uint64_t idst = n_kv*(h*n_stream*n_tps_pad + s*n_tps_pad + ii);
 
-                int enabled_for_this_token = 0;
-                
+                // int enabled_for_this_token = 0;
                 if (is_image_token_batch && causal_attn) {
                     // FOR IMAGE TOKENS: Limit attention based on virtual position
                     llama_pos virtual_pos = p1 + ii;  // 4, 5, 6, 7, 8, ...
@@ -1323,7 +1322,7 @@ void llama_kv_cache_unified::set_input_kq_mask(ggml_tensor * dst, const llama_ub
                         if (position_counter <= virtual_pos) {
                             if (!is_masked_swa(cells.pos_get(j), p1)) {
                                 data[idst + j] = hparams.use_alibi ? -std::abs(cells.pos_get(j) - p1) : 0.0f;
-                                enabled_for_this_token++;
+                                // enabled_for_this_token++;
                             }
                         }
                         position_counter++;
@@ -1341,7 +1340,7 @@ void llama_kv_cache_unified::set_input_kq_mask(ggml_tensor * dst, const llama_ub
                         if (is_masked_swa(p0, p1)) continue;
                         
                         data[idst + j] = hparams.use_alibi ? -std::abs(p0 - p1) : 0.0f;
-                        enabled_for_this_token++;
+                        // enabled_for_this_token++;
                     }
                     // printf("Token %u (pos=%d): can attend to %d positions\n", 
                     //        i, p1, enabled_for_this_token);

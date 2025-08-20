@@ -13,6 +13,19 @@
 #include <limits>
 #include <vector>
 
+using raw_buffer = std::vector<float>;
+
+static std::string fnv_hash(const uint8_t * data, size_t len) {
+    const uint64_t fnv_prime = 0x100000001b3ULL;
+    uint64_t hash = 0xcbf29ce484222325ULL;
+
+    for (size_t i = 0; i < len; ++i) {
+        hash ^= data[i];
+        hash *= fnv_prime;
+    }
+    return std::to_string(hash);
+}
+
 // represents raw image data, layout is RGBRGBRGB...
 // length of data must be nx * ny * 3
 struct mtmd_bitmap {
@@ -363,6 +376,10 @@ struct mtmd_tokenizer {
     mtmd_context * ctx;
     std::vector<const mtmd_bitmap *> bitmaps;
 
+    // @andrei: prebuilt patch embeddings (float32) + shapes [ny, nx, embed_dim]
+    std::vector<std::vector<float>> prebuilt_imgs;
+    std::vector<std::array<uint32_t, 3>> prebuilt_shapes;
+
     std::string input_text;
     bool add_special;
     bool parse_special;
@@ -370,17 +387,49 @@ struct mtmd_tokenizer {
 
     mtmd_input_chunks cur;
 
+    // Bitmap constructor
     mtmd_tokenizer(mtmd_context * ctx,
-            const mtmd_input_text * text,
-            const mtmd_bitmap ** bitmaps,
-            size_t n_bitmaps) : ctx(ctx), bitmaps(bitmaps, bitmaps + n_bitmaps) {
+                   const mtmd_input_text * text,
+                   const mtmd_bitmap ** bitmaps,
+                   size_t n_bitmaps)
+        : ctx(ctx), bitmaps(bitmaps, bitmaps + n_bitmaps) {
         add_special   = text->add_special;
         parse_special = text->parse_special;
         input_text    = text->text;
         vocab         = llama_model_get_vocab(ctx->text_model);
 
-        // for compatibility, we convert image marker to media marker
         string_replace_all(input_text, MTMD_DEFAULT_IMAGE_MARKER, ctx->media_marker);
+    }
+
+    // Prebuilt patch constructor (C ABI–friendly, float32 + [ny,nx,dim])
+    mtmd_tokenizer(mtmd_context * ctx,
+                   const mtmd_input_text * text,
+                   const float * const * images,     // array of float32 buffers
+                   const size_t * sizes,             // array of sizes (in floats)
+                   size_t num_images,
+                   const uint32_t (*shapes)[3],      // array of {ny, nx, embed_dim}
+                   size_t num_shapes)
+        : ctx(ctx) {
+        add_special   = text->add_special;
+        parse_special = text->parse_special;
+        input_text    = text->text;
+        vocab         = llama_model_get_vocab(ctx->text_model);
+
+        string_replace_all(input_text, MTMD_DEFAULT_IMAGE_MARKER, ctx->media_marker);
+
+        // Copy float32 buffers into owned vectors
+        prebuilt_imgs.reserve(num_images);
+        for (size_t i = 0; i < num_images; ++i) {
+            const float *ptr = images[i];
+            const size_t n   = sizes[i]; // number of floats
+            prebuilt_imgs.emplace_back(ptr, ptr + n);
+        }
+
+        // Copy shapes as [ny, nx, embed_dim]
+        prebuilt_shapes.reserve(num_shapes);
+        for (size_t i = 0; i < num_shapes; ++i) {
+            prebuilt_shapes.push_back({ shapes[i][0], shapes[i][1], shapes[i][2] });
+        }
     }
 
     int32_t tokenize(mtmd_input_chunks * output) {
@@ -439,6 +488,88 @@ struct mtmd_tokenizer {
 
         return 0;
     }
+
+    int32_t tokenize_prebuilt(mtmd_input_chunks * output) {
+        // Require M-RoPE for 2D patch positioning (prebuilt flow depends on it)
+        if (!ctx->use_mrope) {
+            LOG_ERR("%s: error: prebuilt path requires use_mrope=true\n", __func__);
+            return 1;
+        }
+
+        // Reset current chunk list
+        cur.entries.clear();
+
+        // Split input by media markers
+        std::vector<std::string> parts = split_text(input_text, ctx->media_marker);
+
+        // Count markers in the text
+        size_t markers_needed = 0;
+        for (const auto & part : parts) {
+            if (part == ctx->media_marker) {
+                ++markers_needed;
+            }
+        }
+
+        // Validate counts early for clearer errors
+        if (markers_needed != prebuilt_imgs.size() || markers_needed != prebuilt_shapes.size()) {
+            LOG_ERR("%s: error: number of markers (%zu) does not match prebuilt images (%zu) or shapes (%zu)\n",
+                    __func__, markers_needed, prebuilt_imgs.size(), prebuilt_shapes.size());
+            return 1;
+        }
+
+        // Walk parts; insert text or image chunks
+        size_t i_img = 0;
+        for (auto & part : parts) {
+            if (part == ctx->media_marker) {
+                // Bounds check (defensive; should already match from the count check)
+                if (i_img >= prebuilt_imgs.size() || i_img >= prebuilt_shapes.size()) {
+                    LOG_ERR("%s: error: out-of-bounds prebuilt image/shape index (%zu)\n", __func__, i_img);
+                    return 1;
+                }
+
+                const std::vector<float>           & buf   = prebuilt_imgs[i_img];
+                const std::array<uint32_t, 3>      & shape = prebuilt_shapes[i_img];
+
+                // Add image chunk from precomputed patch embeddings
+                int32_t res = add_media_prebuilt(buf, shape);
+                if (res != 0) {
+                    return res;
+                }
+
+                ++i_img;
+            } else {
+                // Normal text segment
+                add_text(part, parse_special);
+            }
+        }
+
+        // Add BOS/EOS like the bitmap path
+        if (add_special && llama_vocab_get_add_bos(vocab)) {
+            if (!cur.entries.empty() && cur.entries[0].type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
+                cur.entries[0].tokens_text.insert(
+                    cur.entries[0].tokens_text.begin(),
+                    llama_vocab_bos(vocab)
+                );
+            } else {
+                mtmd_input_chunk bos_chunk{
+                    MTMD_INPUT_CHUNK_TYPE_TEXT,
+                    { llama_vocab_bos(vocab) },
+                    nullptr, // image tokens
+                    nullptr, // audio tokens
+                };
+                cur.entries.insert(cur.entries.begin(), std::move(bos_chunk));
+            }
+        }
+
+        if (add_special && llama_vocab_get_add_eos(vocab)) {
+            // Append EOS to the final text position (same helper used in bitmap path)
+            add_text({ llama_vocab_eos(vocab) });
+        }
+
+        *output = std::move(cur);
+        return 0;
+    }
+
 
     void add_text(const std::string & txt, bool parse_special) {
         LOG_DBG("%s: %s\n", __func__, txt.c_str());
@@ -664,6 +795,83 @@ struct mtmd_tokenizer {
         return 0;
     }
 
+
+    int32_t add_media_prebuilt(const std::vector<float> & buf,
+                           const std::array<uint32_t, 3> & shape) {
+        // Require M-RoPE for correct 2D positional encoding
+        if (!ctx->use_mrope) {
+            LOG_ERR("%s: error: add_media_prebuilt requires MRoPE-enabled model\n", __func__);
+            return 1;
+        }
+
+        const uint32_t npy = shape[0]; // patch grid height
+        const uint32_t npx = shape[1]; // patch grid width
+        const uint32_t dim = shape[2]; // embedding dimension
+
+        // Validate buffer size
+        const size_t expected = static_cast<size_t>(npy) * npx * dim;
+        if (buf.size() != expected) {
+            LOG_ERR("%s: error: buf size %zu != expected %zu (ny=%u, nx=%u, dim=%u)\n",
+                    __func__, buf.size(), expected, npy, npx, dim);
+            return 1;
+        }
+
+        if (!ctx->img_beg.empty()) {
+            add_text(ctx->img_beg, true);
+        }
+
+        // ---- Build clip_image_f32 (precomputed patches) ----
+        clip_image_f32_ptr img(new clip_image_f32);
+        img->is_precomputed = true;
+
+        img->npy   = static_cast<int>(npy);
+        img->npx   = static_cast<int>(npx);
+        img->p_dim = static_cast<int>(dim);
+
+        // Virtual pixel dimensions (14 pixels per patch)
+        img->ny = static_cast<int>(npy) * 14;
+        img->nx = static_cast<int>(npx) * 14;
+
+        // Copy floats
+        img->buf = buf;
+
+        // ---- Wrap into batch ----
+        clip_image_f32_batch batch_f32;
+        batch_f32.entries.emplace_back(std::move(img));
+
+        // ---- Create mtmd_image_tokens ----
+        mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
+        image_tokens->use_mrope_pos = true;
+        image_tokens->nx = npx / 2; // tokens in X = number of patches, divided by merge_ratio 2
+        image_tokens->ny = npy / 2; // tokens in Y = number of patches, divided by merge_ratio 2
+        image_tokens->batch_f32 = std::move(batch_f32);
+
+        // Generate ID from float32 buffer (FNV hash on raw bytes)
+        std::string hash = fnv_hash(
+            reinterpret_cast<const uint8_t*>(buf.data()),
+            buf.size() * sizeof(float)
+        );
+
+        image_tokens->id = std::move(hash);
+
+        // ---- Package into an input chunk ----
+        mtmd_input_chunk chunk{
+            MTMD_INPUT_CHUNK_TYPE_IMAGE,
+            {}, // no text tokens
+            std::move(image_tokens),
+            nullptr // no audio tokens
+        };
+
+        cur.entries.emplace_back(std::move(chunk));
+
+        // Optional "end of image" marker
+        if (!ctx->img_end.empty()) {
+            add_text(ctx->img_end, true);
+        }
+
+        return 0;
+    }
+
     std::vector<mtmd_input_chunk> split_batch_to_chunk(clip_image_f32_batch && batch_f32, const std::string & id) {
         std::vector<mtmd_input_chunk> chunks;
 
@@ -737,6 +945,26 @@ int32_t mtmd_tokenize(mtmd_context * ctx,
     return tokenizer.tokenize(output);
 }
 
+int32_t mtmd_tokenize_prebuilt(mtmd_context * ctx,
+                               mtmd_input_chunks * output,
+                               const mtmd_input_text * text,
+                               const float * const * prebuilt_images,
+                               const size_t * prebuilt_sizes,
+                               size_t num_images,
+                               const uint32_t (*prebuilt_shapes)[3],
+                               size_t num_shapes) {
+
+    mtmd_tokenizer tokenizer(ctx,
+                             text,
+                             prebuilt_images,
+                             prebuilt_sizes,
+                             num_images,
+                             prebuilt_shapes,
+                             num_shapes);
+
+    return tokenizer.tokenize_prebuilt(output);
+}
+
 int32_t mtmd_encode_chunk(mtmd_context * ctx, const mtmd_input_chunk * chunk) {
     if (chunk->type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
         LOG_WRN("mtmd_encode_chunk has no effect for text chunks\n");
@@ -788,7 +1016,6 @@ int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) 
                 ctx->image_embd_v.data() + i*n_mmproj_embd*n_tokens_per_image);
         }
     } else {
-        printf("mtmd_encode: using batch encoding for %zu images\n", image_tokens->batch_f32.entries.size());
         ok = clip_image_batch_encode(
             ctx_clip,
             ctx->n_threads,

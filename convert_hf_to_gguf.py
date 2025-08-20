@@ -31,7 +31,6 @@ import gguf
 
 logger = logging.getLogger("hf-to-gguf")
 
-
 ###### MODEL DEFINITIONS ######
 
 class SentencePieceTokenTypes(IntEnum):
@@ -3060,13 +3059,10 @@ class Qwen2VLVisionModel(MmprojModel):
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         del bid, name, n_dims  # unused
         if ".patch_embd." in new_name:
-            return gguf.GGMLQuantizationType.F16
+            # return gguf.GGMLQuantizationType.F16
+            return gguf.GGMLQuantizationType.F32
         if ".position_embd." in new_name:
             return gguf.GGMLQuantizationType.F32
-        # if "mm.0.w" in new_name or "mm.2.w" in new_name:
-        #     # mm.0.w and mm.1.w are the weights of the final linear layers
-        #     # in Qwen2_5_VL, they are quantized to F32
-        #     return gguf.GGMLQuantizationType.F16
         return False
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
@@ -3089,15 +3085,28 @@ class Qwen2VLVisionModel(MmprojModel):
                     (self.map_tensor_name(name.replace("qkv", "k")), wk),
                     (self.map_tensor_name(name.replace("qkv", "v")), wv),
                 ]
+            
             elif 'patch_embed.proj.weight' in name:
-                # split Conv3D into Conv2Ds
+                # Conv3D: [out=embed_dim, in=3, kT=2, kH=14, kW=14]
                 c1, c2, kt, kh, kw = data_torch.shape
-                del c1, c2, kh, kw  # unused
-                assert kt == 2, "Current implmentation only support temporal_patch_size of 2"
-                return [
-                    (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight"  , data_torch[:, :, 0, ...]),
-                    (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight.1", data_torch[:, :, 1, ...]),
+                assert kt == 2, "Only temporal_patch_size=2 supported"
+
+                # Keep existing 2D slices (for legacy 2×conv2d path)
+                outputs = [
+                    (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight",
+                    data_torch[:, :, 0, ...]),
+                    (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight.1",
+                    data_torch[:, :, 1, ...]),
                 ]
+
+                # Flat matmul weight: row-major [out, in*kT*kH*kW] = [embed_dim, 1176]
+                W_flat = data_torch.contiguous().view(c1, -1)
+                outputs.append(
+                    (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight_flat",
+                    W_flat)
+                )
+
+                return outputs
             
             else:
 

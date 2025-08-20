@@ -196,6 +196,15 @@ MTMD_API int32_t mtmd_tokenize(mtmd_context * ctx,
                                const mtmd_bitmap ** bitmaps,
                                size_t n_bitmaps);
 
+MTMD_API int32_t mtmd_tokenize_prebuilt(mtmd_context * ctx,
+                                        mtmd_input_chunks * output,
+                                        const mtmd_input_text * text,
+                                        const float * const * prebuilt_images,   // array of float32 buffers
+                                        const size_t * prebuilt_sizes,           // array of sizes (floats per buffer)
+                                        size_t num_images,                       // number of buffers
+                                        const uint32_t (*prebuilt_shapes)[3],    // array of {ny, nx, embed_dim}
+                                        size_t num_shapes);                      // number of shapes
+
 // returns 0 on success
 // TODO: deprecate
 MTMD_API int32_t mtmd_encode(mtmd_context * ctx,
@@ -230,6 +239,7 @@ namespace mtmd {
 struct mtmd_context_deleter {
     void operator()(mtmd_context * val) { mtmd_free(val); }
 };
+
 using context_ptr = std::unique_ptr<mtmd_context, mtmd_context_deleter>;
 
 struct mtmd_bitmap_deleter {

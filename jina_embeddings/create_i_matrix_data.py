@@ -7,16 +7,17 @@ Uses NLPAUG library for professional-grade text augmentation.
 Requirements: pip install nlpaug pandas click
 """
 
-import click # type: ignore
-import pandas as pd # type: ignore
+import logging
 import random
 from pathlib import Path
-from typing import List, Tuple, Optional
-import logging
+from typing import List, Optional, Tuple
+
+import click  # type: ignore
+import pandas as pd  # type: ignore
 
 # NLPAUG imports - required
-import nlpaug.augmenter.char as nac # type: ignore
-import nlpaug.augmenter.word as naw # type: ignore
+import nlpaug.augmenter.char as nac  # type: ignore
+import nlpaug.augmenter.word as naw  # type: ignore
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)

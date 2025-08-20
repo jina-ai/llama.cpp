@@ -177,6 +177,12 @@ struct clip_image_f32 {
     int nx;
     int ny;
 
+    int npx = 0; 
+    int npy = 0; 
+    int p_dim = 0;
+
+    bool is_precomputed = false;  // true if buf already contains patch embeddings
+
     std::vector<float> buf;
 };
 
