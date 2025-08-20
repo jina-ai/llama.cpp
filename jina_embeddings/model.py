@@ -150,7 +150,7 @@ class LlamaCppServerEmbeddingModel:
         
         return f"data:{mime_type};base64,{image_data}"
 
-    def _image_to_pixel_values(self, image: Union[str, Image.Image]) -> Tuple[str, List[int]]:
+    def _image_to_pixel_values(self, image: Union[str, Image.Image]) -> Tuple[np.array, List[int]]:
         """
         Convert image (path or PIL.Image) + text into Qwen2.5-VL pixel_values (patch embeddings),
         serialize them to raw float32 binary, and return (base64 string, [nx, ny, embd]).
@@ -172,12 +172,7 @@ class LlamaCppServerEmbeddingModel:
         _, nx, ny = image_grid_thw[0]
 
         assert num_patches == nx * ny, f"Expected {nx}x{ny} patches, got {num_patches} patches"
-        
-        # Convert to raw float32 binary
-        buf = pixel_values.tobytes(order="C")
-        b64_data = base64.b64encode(buf).decode("utf-8")
-
-        return b64_data, [nx, ny, embd]
+        return pixel_values, [nx, ny, embd]
 
     def _trim_text_with_tokenizer(self, text: str) -> str:
         """Trim text to max_text_length using the configured tokenizer"""
@@ -209,8 +204,11 @@ class LlamaCppServerEmbeddingModel:
                 # NOTE: uncomment these two lines if you want to use normal processing pipeline 
                 # data_url = self._image_to_data_url(item["image"])
                 # payload["image"] = data_url
-                b64_bin, shape = self._image_to_pixel_values(item["image"])
-                payload["prebuilt_image"] = b64_bin
+                pixel_values, shape = self._image_to_pixel_values(item["image"])
+                buf = pixel_values.tobytes(order="C")
+                b64_data = base64.b64encode(buf).decode("utf-8")
+
+                payload["prebuilt_image"] = b64_data
                 payload["prebuilt_image_shape"] = shape # type: ignore
             
             is_image_request = item["image"] is not None
@@ -233,6 +231,7 @@ class LlamaCppServerEmbeddingModel:
                 except Exception as e:
                     print(f"Error pooling image embeddings: {e}")
                     print(np.array(item["image"]))
+                    print(pixel_values) # type: ignore
                     print(image_embeddings)
                     continue
           
