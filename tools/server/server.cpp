@@ -2602,10 +2602,6 @@ struct server_context {
     }
 
     void send_embedding(const server_slot & slot, const llama_batch & batch) {
-        printf("=== send_embedding DEBUG ===\n");
-        printf("batch.n_tokens = %d\n", batch.n_tokens);
-        printf("has_stored_embeddings = %s\n", slot.has_stored_embeddings ? "true" : "false");
-        
         auto res = std::make_unique<server_task_result_embd>();
         res->id        = slot.id_task;
         res->index     = slot.index;
@@ -2613,31 +2609,21 @@ struct server_context {
         res->oaicompat = slot.params.oaicompat;
 
         const int n_embd = llama_model_n_embd(model);
-        printf("n_embd = %d\n", n_embd);
-
         int pooling_type = llama_pooling_type(slot.ctx);
-        printf("pooling_type = %d (NONE=%d)\n", pooling_type, LLAMA_POOLING_TYPE_NONE);
 
         // Only support token-level embeddings - no pooling
         if (pooling_type != LLAMA_POOLING_TYPE_NONE) {
-            printf("ERROR: Pooling is not supported for embeddings\n");
-            printf("=== send_embedding END (ERROR) ===\n");
-            
-            // Send error response
             send_error(slot, "pooling is not supported for embeddings - use token-level embeddings only", ERROR_TYPE_SERVER);
             return;
         }
 
         if (slot.has_stored_embeddings) {
             // *** MULTIMODAL EMBEDDING ASSEMBLY ***
-            printf("ASSEMBLY: Multimodal embedding - combining all parts (token-level only)\n");
             
             // Part 1: Pre-image text embeddings
             for (const auto& pre_embd : slot.stored_pre_image_embeddings) {
                 res->embedding.push_back(pre_embd);
             }
-
-            printf("ASSEMBLY: Added %zu pre-image embeddings\n", slot.stored_pre_image_embeddings.size());
             
             // *** SET IMAGE START INDEX ***
             res->start_image_token_idx = slot.stored_pre_image_embeddings.size();
@@ -2646,66 +2632,40 @@ struct server_context {
             for (const auto& img_embd : slot.stored_image_embeddings) {
                 res->embedding.push_back(img_embd);
             }
-
-            printf("ASSEMBLY: Added %zu image embeddings\n", slot.stored_image_embeddings.size());
             
             // *** SET IMAGE END INDEX ***
             res->end_image_token_idx = slot.stored_pre_image_embeddings.size() + slot.stored_image_embeddings.size() - 1;
             
             // Part 3: Post-image text embeddings (current batch) - token-level only
-            printf("ASSEMBLY: Using token-level embeddings for post-image text\n");
             int post_image_embeddings = 0;
             
             for (int pos = 0; pos < batch.n_tokens; ++pos) {
                 const float * embd = llama_get_embeddings_ith(ctx, pos);
                 if (embd == nullptr) {
-                    printf("ERROR: Missing post-image embedding at batch pos %d\n", pos);
                     send_error(slot, "missing post-image embedding at position " + std::to_string(pos), ERROR_TYPE_SERVER);
                     return;
                 }
                 
                 res->embedding.emplace_back(embd, embd + n_embd);
                 post_image_embeddings++;
-                if (pos < 3) {
-                    printf("ASSEMBLY: Found post-image embedding at batch pos %d\n", pos);
-                }
             }
-            printf("ASSEMBLY: Added %d post-image embeddings from current batch\n", post_image_embeddings);
-            
-            printf("ASSEMBLY: Total multimodal embeddings: %zu (pre:%zu + img:%zu + post:%d)\n",
-                res->embedding.size(),
-                slot.stored_pre_image_embeddings.size(),
-                slot.stored_image_embeddings.size(),
-                post_image_embeddings);
-            
-            printf("ASSEMBLY: Image token indices: start=%d, end=%d\n", 
-                res->start_image_token_idx, res->end_image_token_idx);
 
         } else {
             // *** REGULAR TEXT-ONLY EMBEDDING - TOKEN-LEVEL ONLY ***
-            printf("ASSEMBLY: Text-only embedding - token-level only\n");
             
             int embeddings_found = 0;
             for (int pos = 0; pos < slot.n_past; ++pos) {
                 const float * embd = llama_get_embeddings_ith(ctx, pos);
                 if (embd == nullptr) {
-                    printf("ERROR: Missing text embedding at pos %d\n", pos);
                     send_error(slot, "missing text embedding at position " + std::to_string(pos), ERROR_TYPE_SERVER);
                     return;
                 }
                 
                 res->embedding.emplace_back(embd, embd + n_embd);
                 embeddings_found++;
-                if (pos < 3 || pos >= slot.n_past - 3) {
-                    printf("Found embedding at pos %d\n", pos);
-                }
             }
-            printf("Total embeddings found: %d out of %d positions\n", embeddings_found, slot.n_past);
         }
-
-        printf("Final embedding count: %zu\n", res->embedding.size());
-        printf("=== send_embedding END ===\n");
-
+        
         queue_results.send(std::move(res));
     }
 
