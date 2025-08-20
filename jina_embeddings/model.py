@@ -231,8 +231,10 @@ class LlamaCppServerEmbeddingModel:
                 try:
                     pooled = image_embeddings.mean(axis=0)
                 except Exception as e:
+                    print(f"Error pooling image embeddings: {e}")
                     print(image_embeddings)
-                    raise e
+                    continue
+          
                 self._log(f"🖼️ Extracted image embeddings shape: {image_embeddings.shape}")
                 self._log(f"🖼️ Image token indices: start={start_idx}, end={end_idx}")
                 self._log(f"🖼️ Image embeddings extracted: {len(image_embeddings)}")
