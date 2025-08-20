@@ -7,6 +7,7 @@ from typing import List, Optional, Tuple, Union
 
 import numpy as np # type: ignore
 import requests # type: ignore
+import torch # type: ignore
 from PIL import Image # type: ignore
 from typing_extensions import TypedDict # type: ignore
 from tqdm import tqdm # type: ignore
@@ -230,13 +231,17 @@ class LlamaCppServerEmbeddingModel:
                     pooled = image_embeddings.mean(axis=0)
                 except Exception as e:
                     print(f"Error pooling image embeddings: {e}")
-                    image_data = np.array(item["image"])
-                    print(f"Image data shape: {image_data.shape}")
-                    print(image_data)
-                    print(f"NaN in image embeddings: {np.isnan(image_embeddings).any()}")
+                    try:
+                        image_data = torch.as_tensor(item["image"], dtype=torch.float32)
+                        print(f"Image data shape: {image_data.shape}")
+                        print(image_data)
+                    except Exception as ee:
+                        print(f"Error converting image data: {ee}")
+
+                    print(f"NaN in image embeddings: {torch.isnan(image_embeddings).any().item()}")
                     print("Image pixel values:")
-                    print(pixel_values) # type: ignore
-                    primt(f"NaN in pixel values: {np.isnan(pixel_values).any()}") # type: ignore
+                    print(pixel_values)  # type: ignore
+                    print(f"NaN in pixel values: {torch.isnan(torch.as_tensor(pixel_values, dtype=torch.float32)).any().item()}")  # type: ignore
                     print(image_embeddings)
                     continue
           
