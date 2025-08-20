@@ -232,7 +232,9 @@ class LlamaCppServerEmbeddingModel:
                 except Exception as e:
                     print(f"Error pooling image embeddings: {e}")
                     # convert PIL -> tensor for logging
-                    image_data = torch.as_tensor(np.array(item["image"]), dtype=torch.float32)
+                    # list(image.getdata())
+                    image = item['image']
+                    image_data = torch.as_tensor(list(image.getdata()), dtype=torch.float32)
                     image_embeddings = torch.as_tensor(image_embeddings, dtype=torch.float32)
                     print(f"Image data shape: {tuple(image_data.shape)}")
                     print(f"NaN in image embeddings: {torch.isnan(image_embeddings).any().item()}")
