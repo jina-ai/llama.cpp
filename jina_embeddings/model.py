@@ -230,8 +230,13 @@ class LlamaCppServerEmbeddingModel:
                     pooled = image_embeddings.mean(axis=0)
                 except Exception as e:
                     print(f"Error pooling image embeddings: {e}")
-                    print(np.array(item["image"]))
+                    image_data = np.array(item["image"])
+                    print(f"Image data shape: {image_data.shape}")
+                    print(image_data)
+                    print(f"NaN in image embeddings: {np.isnan(image_embeddings).any()}")
+                    print("Image pixel values:")
                     print(pixel_values) # type: ignore
+                    primt(f"NaN in pixel values: {np.isnan(pixel_values).any()}") # type: ignore
                     print(image_embeddings)
                     continue
           
