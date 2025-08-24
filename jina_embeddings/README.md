@@ -23,6 +23,8 @@ You can donwload model files and mmproj like so:
 ```
 cd llama.cpp
 huggingface-cli download jinaai/jina-embeddings-v4-text-retrieval-GGUF --include jina-embeddings-v4-text-retrieval-F16.gguf --local-dir gguf-models
+huggingface-cli download jinaai/jina-embeddings-v4-text-retrieval-GGUF --include jina-embeddings-v4-text-retrieval-Q4_K_M.gguf  --local-dir gguf-models
+huggingface-cli download jinaai/jina-embeddings-v4-text-retrieval-GGUF --include jina-embeddings-v4-text-retrieval-IQ4_XS.gguf --local-dir gguf-models
 huggingface-cli download jinaai/jina-embeddings-v4-text-retrieval-GGUF --include mmproj-jina-embeddings-v4-retrieval-BF16.gguf --local-dir gguf-models
 ```
 We recommend using the BF16 mmproj file since currently there seems to be a problem with the F16 mmproj that produces NaN embeddings on some Vidore benchmarks.
@@ -31,9 +33,9 @@ We recommend using the BF16 mmproj file since currently there seems to be a prob
 cd llama.cpp
 python jina_embeddings/eval_mteb.py \
 	--llama-bin build/bin/llama-server \
-	--model "$PWD/gguf-models/jina-embeddings-v4-text-retrieval-F16.gguf" \
+	--model "$PWD/gguf-models/jina-embeddings-v4-text-retrieval-IQ4_XS.gguf" \
 	--mmproj "$PWD/gguf-models/mmproj-jina-embeddings-v4-retrieval-BF16.gguf" \
-	--tasks VidoreSyntheticDocQAEnergyRetrieval \
+	--tasks VidoreTatdqaRetrieval \
 	--output-dir jev4-gguf-vidore \
 	--gpus 0 \
 	--no-logging \

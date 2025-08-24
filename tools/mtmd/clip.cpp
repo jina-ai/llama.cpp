@@ -63,7 +63,6 @@ log_params_t create_default_log_params() {
     return params;
 }
 
-// TODO: simplify this function, it's raising a bunch of warnings
 void log_to_file_or_console_parameterized(
     FILE* output_file, 
     ggml_tensor* t,
@@ -177,55 +176,79 @@ void log_to_file_or_console_parameterized(
     #undef PRINT_TO_OUTPUT
 }
 
-void load_tensor_from_file(std::vector<float>& out, int d0, int d1, int d2, const char* filename) {
-    FILE* f = fopen(filename, "r");
+static inline bool is_c_contiguous(const ggml_tensor* t) {
+    const size_t es = ggml_element_size(t);
+    if (t->nb[0] != es) return false;
+
+    const size_t e0 = (size_t)std::max<int64_t>(1, t->ne[0]);
+    const size_t e1 = (size_t)std::max<int64_t>(1, t->ne[1]);
+    const size_t e2 = (size_t)std::max<int64_t>(1, t->ne[2]);
+
+    if (t->nb[1] != e0 * es)       return false;
+    if (t->nb[2] != e1 * t->nb[1]) return false;
+    if (t->nb[3] != e2 * t->nb[2]) return false;
+    return true;
+}
+
+bool write_tensor_lightbin(const char* filename, const ggml_tensor* t) {
+    if (!t || !t->data) {
+        std::fprintf(stderr, "write_tensor_lightbin: null tensor/data\n");
+        return false;
+    }
+    if (!is_c_contiguous(t)) {
+        std::fprintf(stderr, "write_tensor_lightbin: tensor is NOT C-contiguous\n");
+        return false;
+    }
+
+    // map ggml_type -> small integer code
+    int32_t dtype_code = -1;
+    switch (t->type) {
+        case GGML_TYPE_F32:  dtype_code = 0; break;
+        case GGML_TYPE_F16:  dtype_code = 1; break;
+        case GGML_TYPE_BF16: dtype_code = 2; break;
+        case GGML_TYPE_I8:   dtype_code = 3; break;
+        case GGML_TYPE_I16:  dtype_code = 4; break;
+        case GGML_TYPE_I32:  dtype_code = 5; break;
+        case GGML_TYPE_I64:  dtype_code = 6; break;
+        case GGML_TYPE_U8:   dtype_code = 7; break;
+        default:
+            std::fprintf(stderr, "write_tensor_lightbin: unsupported ggml type %d\n", (int)t->type);
+            return false;
+    }
+
+    // trim trailing singleton dims (but keep at least 1)
+    int32_t num_dims = 4;
+    while (num_dims > 1 && t->ne[num_dims - 1] <= 1) num_dims--;
+
+    FILE* f = std::fopen(filename, "wb");
     if (!f) {
-        fprintf(stderr, "ERROR: Cannot open %s\n", filename);
-        exit(1);
+        std::fprintf(stderr, "write_tensor_lightbin: fopen('%s') failed: %s\n",
+                     filename, std::strerror(errno));
+        return false;
     }
 
-    size_t total_elements = static_cast<size_t>(d0) * std::max(1, d1) * std::max(1, d2);
-    std::vector<float> flat_data(total_elements);
+    auto fail = [&](const char* msg) {
+        std::fprintf(stderr, "write_tensor_lightbin: %s\n", msg);
+        std::fclose(f);
+        return false;
+    };
 
-    for (size_t i = 0; i < total_elements; i++) {
-        if (fscanf(f, "%f", &flat_data[i]) != 1) {
-            fprintf(stderr, "ERROR: Failed to read element %zu from %s\n", i, filename);
-            fclose(f);
-            exit(1);
-        }
+    // header
+    if (std::fwrite(&num_dims, sizeof(num_dims), 1, f) != 1) return fail("write num_dims");
+    for (int i = 0; i < num_dims; ++i) {
+        int64_t d = t->ne[i];
+        if (std::fwrite(&d, sizeof(d), 1, f) != 1) return fail("write dims");
     }
-    fclose(f);
+    if (std::fwrite(&dtype_code, sizeof(dtype_code), 1, f) != 1) return fail("write dtype");
 
-    out.resize(total_elements);
-
-    if (d2 == 0 || d2 == 1) {
-        // 2D Tensor: GGML [d_head, n_patch] vs PyTorch [n_patch, d_head]
-        const int d_head = d0;
-        const int n_patch = d1;
-
-        for (int patch = 0; patch < n_patch; patch++) {
-            for (int head_dim = 0; head_dim < d_head; head_dim++) {
-                size_t pytorch_idx = patch * d_head + head_dim;
-                size_t ggml_idx    = head_dim * n_patch + patch;
-                out[ggml_idx] = flat_data[pytorch_idx];
-            }
-        }
-    } else {
-        // 3D Tensor: GGML [d_head, n_head, n_patch] vs PyTorch [n_patch, n_head, d_head]
-        const int d_head  = d0;
-        const int n_head  = d1;
-        const int n_patch = d2;
-
-        for (int patch = 0; patch < n_patch; patch++) {
-            for (int head = 0; head < n_head; head++) {
-                for (int head_dim = 0; head_dim < d_head; head_dim++) {
-                    size_t pytorch_idx = patch * (n_head * d_head) + head * d_head + head_dim;
-                    size_t ggml_idx    = head_dim * (n_head * n_patch) + head * n_patch + patch;
-                    out[ggml_idx] = flat_data[pytorch_idx];
-                }
-            }
-        }
+    // payload
+    const size_t nbytes = ggml_nelements(t) * ggml_element_size(t);
+    if (nbytes) {
+        if (std::fwrite(t->data, 1, nbytes, f) != nbytes) return fail("write data");
     }
+
+    std::fclose(f);
+    return true;
 }
 
 //#define CLIP_DEBUG_FUNCTIONS

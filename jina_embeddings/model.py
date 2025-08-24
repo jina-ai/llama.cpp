@@ -7,7 +7,6 @@ from typing import List, Optional, Tuple, Union
 
 import numpy as np # type: ignore
 import requests # type: ignore
-import torch # type: ignore
 from PIL import Image # type: ignore
 from typing_extensions import TypedDict # type: ignore
 from tqdm import tqdm # type: ignore
@@ -34,7 +33,7 @@ class LlamaCppServerEmbeddingModel:
         normalize: bool = False, 
         logging: bool = False,
         hf_model_name: Optional[str] = None,
-        max_text_length: int = 512
+        max_text_length: int = 512,
     ) -> None:
         self.llama_bin = llama_bin
         self.model_path = model_path
