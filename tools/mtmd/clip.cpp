@@ -361,9 +361,6 @@ static void clip_image_convert_f32_to_u8(const clip_image_f32& src, clip_image_u
 }
 #endif
 
-
-
-
 //
 // clip layers
 //
@@ -4330,14 +4327,14 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     }
 
     if (ctx->debug_graph) {
-        log_params_t params = create_default_log_params();
-            
+        // log_params_t params = create_default_log_params();
+                
         for (size_t i = 0; i < ctx->debug_print_tensors.size(); i++) {
             ggml_tensor * t = ctx->debug_print_tensors[i];
 
             // Apply name filter
             if (
-                strstr(t->name, "inp_raw") ||
+                // strstr(t->name, "inp_raw") ||
                 strstr(t->name, "patch_embeddings_final") ||
                 strstr(t->name, "norm1") ||
                 strstr(t->name, "attn_out") ||
@@ -4349,12 +4346,15 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 strstr(t->name, "post_norm") ||
                 strstr(t->name, "image_embeddings")
             ) {
-                try {
-                    log_to_file_or_console_parameterized(nullptr, t, &params);
-                } catch (const std::exception& e) {
-                    printf("ERROR logging tensor %s: %s\n", t->name, e.what());
-                } catch (...) {
-                    printf("UNKNOWN ERROR logging tensor %s\n", t->name);
+                // old way:
+                // log_to_file_or_console_parameterized(nullptr, t, &params);
+
+                // new way: dump to bin file named after tensor
+                std::string filename = std::string(t->name) + ".bin";
+                if (!write_tensor_lightbin(filename.c_str(), t)) {
+                    printf("ERROR writing tensor %s\n", t->name);
+                } else {
+                    printf("Wrote tensor %s -> %s\n", t->name, filename.c_str());
                 }
             }
         }
