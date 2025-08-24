@@ -4350,7 +4350,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 // log_to_file_or_console_parameterized(nullptr, t, &params);
 
                 // new way: dump to bin file named after tensor
-                std::string filename = std::string(t->name) + ".bin";
+                std::string filename = "/Users/andrei/Documents/GitHub/jina-llama.cpp/jina_embeddings/temp/debug_tensors/" std::string(t->name) + ".bin";
                 if (!write_tensor_lightbin(filename.c_str(), t)) {
                     printf("ERROR writing tensor %s\n", t->name);
                 } else {
