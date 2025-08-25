@@ -2637,7 +2637,7 @@ struct server_context {
             res->end_image_token_idx = slot.stored_pre_image_embeddings.size() + slot.stored_image_embeddings.size() - 1;
             
             // Part 3: Post-image text embeddings (current batch) - token-level only
-            int post_image_embeddings = 0;
+            // int post_image_embeddings = 0;
             
             for (int pos = 0; pos < batch.n_tokens; ++pos) {
                 const float * embd = llama_get_embeddings_ith(ctx, pos);
@@ -2647,13 +2647,13 @@ struct server_context {
                 }
                 
                 res->embedding.emplace_back(embd, embd + n_embd);
-                post_image_embeddings++;
+                // post_image_embeddings++;
             }
 
         } else {
             // *** REGULAR TEXT-ONLY EMBEDDING - TOKEN-LEVEL ONLY ***
             
-            int embeddings_found = 0;
+            // int embeddings_found = 0;
             for (int pos = 0; pos < slot.n_past; ++pos) {
                 const float * embd = llama_get_embeddings_ith(ctx, pos);
                 if (embd == nullptr) {
@@ -2662,7 +2662,7 @@ struct server_context {
                 }
                 
                 res->embedding.emplace_back(embd, embd + n_embd);
-                embeddings_found++;
+                // embeddings_found++;
             }
         }
 

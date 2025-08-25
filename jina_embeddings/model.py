@@ -57,8 +57,13 @@ class LlamaCppServerEmbeddingModel:
         if not hf_model_name:
             raise ValueError("hf_model_name must be provided to load the processor and tokenizer.")
         
-        self.hf_image_processor = Qwen2VLImageProcessorFast.from_pretrained(self.hf_model_name)
+        self.hf_image_processor = Qwen2VLImageProcessorFast.from_pretrained(self.hf_model_name, max_pixels=602112)
         self.hf_tokenizer = Qwen2TokenizerFast.from_pretrained(self.hf_model_name)
+
+        print("Image proccessor HParams ... ")
+        print(f"Size: {self.hf_image_processor.size}")
+        print(f"min_pixes: {self.hf_image_processor.min_pixels}, max_pixels: {self.hf_image_processor.max_pixels}")
+        # exit(-1)
 
         # Start server
         self._start_server()
@@ -235,6 +240,8 @@ class LlamaCppServerEmbeddingModel:
                 if norm > 0:
                     pooled = pooled / norm
                     self._log(f"🔄 Applied L2 normalization")
+
+            print(pooled)
             
             embeddings.append(pooled)
 

@@ -15,7 +15,7 @@ cmake --build build --config Release
 Compile on Mac (gpu).
 ```bash
 cmake -B build -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=Apple -DGGML_METAL=ON
-cmake --build build --config Release -j 
+cmake --build build --config Release
 ```
 
 # Mteb eval
@@ -52,15 +52,16 @@ python -c "import mteb; tasks = mteb.get_tasks(); print([t.metadata.name for t i
 # Inference example
 ```bash
 cd llama.cpp
-python jina_embeddings/infer_cosine.py   \
-    --llama-bin llama.cpp/build/bin/llama-server   \
-	--model gguf-models/jev4-bf16.gguf \
-    --mmproj gguf-models/mmproj-jina-embeddings-v4-retrieval-BF16.gguf \
+export MTMD_DEBUG_GRAPH=1 # used for debug and saving tensors to dir
+python jina_embeddings/infer_cosine.py \
+    --llama-bin build/bin/llama-server \
+    --model "$PWD/gguf-models/jina-embeddings-v4-text-retrieval-F16.gguf" \
+    --mmproj "$PWD/gguf-models/mmproj-jina-embeddings-v4-retrieval-BF16.gguf" \
     --gpus 0 \
-    --input jina_embeddings/assets/test_data.txt   \
-    --output jev4_cosine_results.md   \
-    --query-prefix "Query: "   \
-    --document-prefix "Passage: "   \
+    --input jina_embeddings/assets/test_data.txt \
+    --output jina_embeddings/temp/cosine_results.md \
+    --query-prefix "Query: " \
+    --document-prefix "Passage: " \
     --normalize
 ```
 
