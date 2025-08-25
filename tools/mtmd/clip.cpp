@@ -4120,11 +4120,11 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     }
 
     if (ctx->debug_graph) {
-        // log_params_t params = create_default_log_params();
+        log_params_t params = create_default_log_params();
 
         // Create a random output dir once per run (timestamp prefix optional)
-        const std::string base = "/Users/andrei/Documents/GitHub/jina-llama.cpp/jina_embeddings/temp";
-        const std::string random_dir = utils_make_random_subdir(base, /*add_timestamp=*/true);
+        // const std::string base = "/Users/andrei/Documents/GitHub/jina-llama.cpp/jina_embeddings/temp";
+        // const std::string random_dir = utils_make_random_subdir(base, /*add_timestamp=*/true);
 
         for (size_t i = 0; i < ctx->debug_print_tensors.size(); i++) {
             ggml_tensor * t = ctx->debug_print_tensors[i];
@@ -4144,15 +4144,15 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 strstr(t->name, "image_embeddings")
             ) {
                 // old way:
-                // log_to_file_or_console_parameterized(nullptr, t, &params);
+                log_to_file_or_console_parameterized(nullptr, t, &params);
 
                 // new way: dump to bin file inside random dir
-                std::string filename = random_dir + "/" + std::string(t->name) + ".bin";
-                if (!write_tensor_lightbin(filename.c_str(), t)) {
-                    printf("ERROR writing tensor %s\n", t->name);
-                } else {
-                    printf("Wrote tensor %s -> %s\n", t->name, filename.c_str());
-                }
+                // std::string filename = random_dir + "/" + std::string(t->name) + ".bin";
+                // if (!write_tensor_lightbin(filename.c_str(), t)) {
+                //     printf("ERROR writing tensor %s\n", t->name);
+                // } else {
+                //     printf("Wrote tensor %s -> %s\n", t->name, filename.c_str());
+                // }
             }
         }
     }
