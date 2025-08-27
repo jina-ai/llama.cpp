@@ -49,7 +49,9 @@ To get the name of all Vidore tasks, run:
 python -c "import mteb; tasks = mteb.get_tasks(); print([t.metadata.name for t in tasks if 'chart' in t.metadata.name.lower() or 'vidore' in t.metadata.name.lower()])"
 ```
 
-# Inference example
+# Inference examples
+
+Infer cosine similarity between multiple samples:
 ```bash
 cd llama.cpp
 export MTMD_DEBUG_GRAPH=1 # used for debug and saving tensors to dir
@@ -63,6 +65,19 @@ python jina_embeddings/infer_cosine.py \
     --query-prefix "Query: " \
     --document-prefix "Passage: " \
     --normalize
+```
+
+Single-image embedding to .npy:
+```bash
+cd llama.cpp
+python jina_embeddings/infer_image.py \
+    --llama-bin build/bin/llama-server \
+    --model "$PWD/gguf-models/jina-embeddings-v4-text-retrieval-F16.gguf" \
+    --mmproj "$PWD/gguf-models/mmproj-jina-embeddings-v4-retrieval-BF16.gguf" \
+    --hf-model-name "jinaai/jina-embeddings-v4" \
+    --output-base jina_embeddings/temp/saved_embeddings \
+    --gpus 0 \
+    jina_embeddings/assets/dog.jpg
 ```
 
 # Conversion
@@ -81,3 +96,22 @@ python convert_hf_to_gguf.py jev4-retrieval \
     --outtype bf16 \
     --mmproj
 ```
+
+---
+
+Generate and save embeddings with the pytorch model
+```bash
+python -m jina-embeddings-v4.infer_image \
+    jina-embeddings-v4/assets/jina_embeddings_v4_perf_table.jpg \
+    --output-base jina-embeddings-v4/temp
+```
+
+Generate heatmaps from llama.cpp & pytorch generated embeddings
+```bash
+python -m jina-embeddings-v4.heatmap_compare \
+    jina-embeddings-v4/temp/jina_embeddings_v4_perf_table-20250827-132816.npy  \
+    jina-embeddings-v4/temp/torch_jina_embeddings_v4_perf_table-20250827-043814.npy \
+    jina-embeddings-v4/assets/jina_embeddings_v4_perf_table.jpg \
+    --hf-model-name jinaai/jina-embeddings-v4
+```
+
