@@ -112,6 +112,6 @@ python -m jina-embeddings-v4.heatmap_compare \
     jina-embeddings-v4/temp/jina_embeddings_v4_perf_table-20250827-132816.npy  \
     jina-embeddings-v4/temp/torch_jina_embeddings_v4_perf_table-20250827-043814.npy \
     jina-embeddings-v4/assets/jina_embeddings_v4_perf_table.jpg \
-    --hf-model-name jinaai/jina-embeddings-v4
+    --hf-model-name jinaai/jina-embeddings-v4 
 ```
 
