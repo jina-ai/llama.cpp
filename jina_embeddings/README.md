@@ -6,12 +6,6 @@ cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-9
 cmake --build build --config Release
 ```
 
-Compile without cURL - doing this where we don't have cURL installed.
-```bash
-cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-9 -DLLAMA_CURL=OFF
-cmake --build build --config Release
-```
-
 Compile on Mac (gpu).
 ```bash
 cmake -B build -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=Apple -DGGML_METAL=ON
@@ -23,8 +17,6 @@ You can donwload model files and mmproj like so:
 ```
 cd llama.cpp
 huggingface-cli download jinaai/jina-embeddings-v4-text-retrieval-GGUF --include jina-embeddings-v4-text-retrieval-F16.gguf --local-dir gguf-models
-huggingface-cli download jinaai/jina-embeddings-v4-text-retrieval-GGUF --include jina-embeddings-v4-text-retrieval-Q4_K_M.gguf  --local-dir gguf-models
-huggingface-cli download jinaai/jina-embeddings-v4-text-retrieval-GGUF --include jina-embeddings-v4-text-retrieval-IQ4_XS.gguf --local-dir gguf-models
 huggingface-cli download jinaai/jina-embeddings-v4-text-retrieval-GGUF --include mmproj-jina-embeddings-v4-retrieval-BF16.gguf --local-dir gguf-models
 ```
 We recommend using the BF16 mmproj file since currently there seems to be a problem with the F16 mmproj that produces NaN embeddings on some Vidore benchmarks.
@@ -33,7 +25,7 @@ We recommend using the BF16 mmproj file since currently there seems to be a prob
 cd llama.cpp
 python jina_embeddings/eval_mteb.py \
 	--llama-bin build/bin/llama-server \
-	--model "$PWD/gguf-models/jina-embeddings-v4-text-retrieval-IQ4_XS.gguf" \
+	--model "$PWD/gguf-models/jina-embeddings-v4-text-retrieval-F16.gguf" \
 	--mmproj "$PWD/gguf-models/mmproj-jina-embeddings-v4-retrieval-BF16.gguf" \
 	--tasks VidoreTatdqaRetrieval \
 	--output-dir jev4-gguf-vidore \
@@ -95,23 +87,5 @@ python convert_hf_to_gguf.py jev4-retrieval \
     --outfile gguf-models/jina-embeddings-v4-BF16.gguf \
     --outtype bf16 \
     --mmproj
-```
-
----
-
-Generate and save embeddings with the pytorch model
-```bash
-python -m jina-embeddings-v4.infer_image \
-    jina-embeddings-v4/assets/jina_embeddings_v4_perf_table.jpg \
-    --output-base jina-embeddings-v4/temp
-```
-
-Generate heatmaps from llama.cpp & pytorch generated embeddings
-```bash
-python -m jina-embeddings-v4.heatmap_compare \
-    jina-embeddings-v4/temp/jina_embeddings_v4_perf_table-20250827-132816.npy  \
-    jina-embeddings-v4/temp/torch_jina_embeddings_v4_perf_table-20250827-043814.npy \
-    jina-embeddings-v4/assets/jina_embeddings_v4_perf_table.jpg \
-    --hf-model-name jinaai/jina-embeddings-v4 
 ```
 
