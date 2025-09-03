@@ -35,6 +35,7 @@ add_library(llama
             unicode-data.cpp
             unicode.cpp
             unicode.h
+            llama-utils.cpp
             )
 
 target_include_directories(llama PRIVATE .)

@@ -7,7 +7,6 @@ from typing import List, Optional, Tuple, Union
 
 import numpy as np # type: ignore
 import requests # type: ignore
-import torch # type: ignore
 from PIL import Image # type: ignore
 from typing_extensions import TypedDict # type: ignore
 from tqdm import tqdm # type: ignore
@@ -31,11 +30,14 @@ class LlamaCppServerEmbeddingModel:
         gpus: str = "0",
         ctx_size: int = 8192,
         ubatch_size: int = 8192,
-        normalize: bool = False, 
+        pool: bool = True,
+        normalize: bool = True, 
         logging: bool = False,
         hf_model_name: Optional[str] = None,
-        max_text_length: int = 512
+        max_text_length: int = 512,
     ) -> None:
+        
+        
         self.llama_bin = llama_bin
         self.model_path = model_path
         self.mmproj_path = mmproj_path
@@ -45,6 +47,7 @@ class LlamaCppServerEmbeddingModel:
         self.gpus = gpus
         self.ctx_size = ctx_size
         self.ubatch_size = ubatch_size
+        self.pool = pool
         self.normalize = normalize
         self.logging = logging
         self.hf_model_name = hf_model_name
@@ -55,11 +58,18 @@ class LlamaCppServerEmbeddingModel:
         # Set server URL
         self.server_url = f"http://{host}:{port}"
 
+        if not self.pool and self.normalize:
+            raise ValueError("Cannot use normalize without pool")
+
         if not hf_model_name:
             raise ValueError("hf_model_name must be provided to load the processor and tokenizer.")
-        
-        self.hf_image_processor = Qwen2VLImageProcessorFast.from_pretrained(self.hf_model_name)
+    
+        self.hf_image_processor = Qwen2VLImageProcessorFast.from_pretrained(self.hf_model_name, max_pixels=602112)
         self.hf_tokenizer = Qwen2TokenizerFast.from_pretrained(self.hf_model_name)
+
+        print("Image proccessor HParams ... ")
+        print(f"Size: {self.hf_image_processor.size}")
+        print(f"min_pixes: {self.hf_image_processor.min_pixels}, max_pixels: {self.hf_image_processor.max_pixels}")
 
         # Start server
         self._start_server()
@@ -219,24 +229,25 @@ class LlamaCppServerEmbeddingModel:
             self._log(f"🔍 Raw embedding shape: {np.array(raw_embedding).shape}")
             
             embedding_array = np.array(raw_embedding)
-            
+
             if is_image_request:
+                # find image token embeddings (plus vision_start/vision_end)
                 start_idx = embedding_data["start_image_token_idx"]
                 end_idx = embedding_data["end_image_token_idx"]    
-                image_embeddings = embedding_array[start_idx-1:end_idx+2]  
-                pooled = image_embeddings.mean(axis=0)
-                self._log(f"🖼️ Extracted image embeddings shape: {image_embeddings.shape}")
+                embedding_array = embedding_array[start_idx-1:end_idx+2]  
+                self._log(f"🖼️ Extracted image embeddings shape: {embedding_array.shape}")
                 self._log(f"🖼️ Image token indices: start={start_idx}, end={end_idx}")
-                self._log(f"🖼️ Image embeddings extracted: {len(image_embeddings)}")
-            else:
-                pooled = embedding_array.mean(axis=0)
+                self._log(f"🖼️ Image embeddings extracted: {len(embedding_array)}")
+
+            if self.pool:
+                embedding_array = embedding_array.mean(axis=0)
 
             if self.normalize:
-                norm = np.linalg.norm(pooled)
+                norm = np.linalg.norm(embedding_array)
                 if norm > 0:
-                    pooled = pooled / norm
+                    embedding_array = embedding_array / norm
                     self._log(f"🔄 Applied L2 normalization")
-            
-            embeddings.append(pooled)
+        
+            embeddings.append(embedding_array)
 
         return np.array(embeddings)

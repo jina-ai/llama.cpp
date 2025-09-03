@@ -10,6 +10,7 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "gguf.h"
+#include "llama-utils.h"
 
 #include <cassert>
 #include <cmath>
@@ -42,191 +43,6 @@ enum norm_type {
     NORM_TYPE_NORMAL,
     NORM_TYPE_RMS,
 };
-
-typedef struct {
-    int start_patch;      // Starting patch index (default: 0)
-    int num_patches;      // Number of patches to log (default: 5)
-    int start_head;       // Starting head index (default: 0)
-    int num_heads;        // Number of heads to log (default: 4)
-    int start_dim;        // Starting dimension index (default: 0)
-    int num_dims;         // Number of dimensions to log (default: 5)
-} log_params_t;
-
-log_params_t create_default_log_params() {
-    log_params_t params = {0};
-    params.start_patch = 0;
-    params.num_patches = 5;
-    params.start_head = 0;
-    params.num_heads = 5;
-    params.start_dim = 0;
-    params.num_dims = 10;
-    return params;
-}
-
-// TODO: simplify this function, it's raising a bunch of warnings
-void log_to_file_or_console_parameterized(
-    FILE* output_file, 
-    ggml_tensor* t,
-    const log_params_t* params
-) {
-    if (!t) return;
-    
-    // Use default parameters if none provided
-    log_params_t default_params = create_default_log_params();
-    if (!params) params = &default_params;
-    
-    #define PRINT_TO_OUTPUT(format, ...) \
-        do { \
-            if (output_file) fprintf(output_file, format, ##__VA_ARGS__); \
-            else printf(format, ##__VA_ARGS__); \
-        } while (0)
-    
-    PRINT_TO_OUTPUT("=== %s === Shape: [", t->name);
-    for (int d = 0; d < GGML_MAX_DIMS && t->ne[d] > 0; d++) {
-        PRINT_TO_OUTPUT("%ld", t->ne[d]);
-        if (d < GGML_MAX_DIMS - 1 && t->ne[d+1] > 0) {
-            PRINT_TO_OUTPUT(", ");
-        }
-    }
-    PRINT_TO_OUTPUT("]\n");
-    
-    size_t tensor_size = ggml_nelements(t);
-    if (tensor_size == 0) {
-        PRINT_TO_OUTPUT("Empty tensor\n\n");
-        return;
-    }
-    
-    float* data = (float*)t->data;
-    
-    if (t->ne[2] <= 1) {
-        // 2D tensor: [d_head, n_patch] in GGML
-        const int d_head = t->ne[0];
-        const int n_patch = t->ne[1];
-        
-        // Calculate patch range
-        int start_patch = std::max(0, std::min(params->start_patch, n_patch - 1));
-        int end_patch = std::min(start_patch + params->num_patches, n_patch);
-        
-        // Calculate dimension range
-        int start_dim = std::max(0, std::min(params->start_dim, d_head - 1));
-        int end_dim = std::min(start_dim + params->num_dims, d_head);
-        
-        PRINT_TO_OUTPUT("Logging patches %d-%d, dimensions %d-%d\n", 
-                       start_patch, end_patch - 1, start_dim, end_dim - 1);
-        
-        for (int patch = start_patch; patch < end_patch; patch++) {
-            PRINT_TO_OUTPUT("Patch %d: ", patch);
-            
-            for (int head_dim = start_dim; head_dim < end_dim; head_dim++) {
-                size_t ggml_idx = patch * d_head + head_dim;
-                PRINT_TO_OUTPUT("%.6f ", data[ggml_idx]);
-            }
-            if (end_dim < d_head) {
-                PRINT_TO_OUTPUT("... (dims %d-%d)", end_dim, d_head - 1);
-            }
-            PRINT_TO_OUTPUT("\n");
-        }
-        if (end_patch < n_patch) {
-            PRINT_TO_OUTPUT("... (patches %d-%d not shown)\n", end_patch, n_patch - 1);
-        }
-    } else {
-        // 3D tensor: [d_head, n_head, n_patch] in GGML
-        const int d_head = t->ne[0];
-        const int n_head = t->ne[1];
-        const int n_patch = t->ne[2];
-        
-        // Calculate ranges
-        int start_patch = std::max(0, std::min(params->start_patch, n_patch - 1));
-        int end_patch = std::min(start_patch + params->num_patches, n_patch);
-        
-        int start_head = std::max(0, std::min(params->start_head, n_head - 1));
-        int end_head = std::min(start_head + params->num_heads, n_head);
-        
-        int start_dim = std::max(0, std::min(params->start_dim, d_head - 1));
-        int end_dim = std::min(start_dim + params->num_dims, d_head);
-        
-        PRINT_TO_OUTPUT("Logging patches %d-%d, heads %d-%d, dimensions %d-%d\n", 
-                       start_patch, end_patch - 1, start_head, end_head - 1, 
-                       start_dim, end_dim - 1);
-        
-        for (int patch = start_patch; patch < end_patch; patch++) {
-            PRINT_TO_OUTPUT("Patch %d\n", patch);
-            
-            for (int head = start_head; head < end_head; head++) {
-                PRINT_TO_OUTPUT("  Head %d: ", head);
-                
-                for (int head_dim = start_dim; head_dim < end_dim; head_dim++) {
-                    size_t ggml_idx = patch * (d_head * n_head) + head * d_head + head_dim;
-                    PRINT_TO_OUTPUT("%.6f ", data[ggml_idx]);
-                }
-                if (end_dim < d_head) {
-                    PRINT_TO_OUTPUT("... (dims %d-%d)", end_dim, d_head - 1);
-                }
-                PRINT_TO_OUTPUT("\n");
-            }
-            if (end_head < n_head) {
-                PRINT_TO_OUTPUT("  ... (heads %d-%d not shown)\n", end_head, n_head - 1);
-            }
-        }
-        if (end_patch < n_patch) {
-            PRINT_TO_OUTPUT("... (patches %d-%d not shown)\n", end_patch, n_patch - 1);
-        }
-    }
-    
-    PRINT_TO_OUTPUT("\n");
-    #undef PRINT_TO_OUTPUT
-}
-
-void load_tensor_from_file(std::vector<float>& out, int d0, int d1, int d2, const char* filename) {
-    FILE* f = fopen(filename, "r");
-    if (!f) {
-        fprintf(stderr, "ERROR: Cannot open %s\n", filename);
-        exit(1);
-    }
-
-    size_t total_elements = static_cast<size_t>(d0) * std::max(1, d1) * std::max(1, d2);
-    std::vector<float> flat_data(total_elements);
-
-    for (size_t i = 0; i < total_elements; i++) {
-        if (fscanf(f, "%f", &flat_data[i]) != 1) {
-            fprintf(stderr, "ERROR: Failed to read element %zu from %s\n", i, filename);
-            fclose(f);
-            exit(1);
-        }
-    }
-    fclose(f);
-
-    out.resize(total_elements);
-
-    if (d2 == 0 || d2 == 1) {
-        // 2D Tensor: GGML [d_head, n_patch] vs PyTorch [n_patch, d_head]
-        const int d_head = d0;
-        const int n_patch = d1;
-
-        for (int patch = 0; patch < n_patch; patch++) {
-            for (int head_dim = 0; head_dim < d_head; head_dim++) {
-                size_t pytorch_idx = patch * d_head + head_dim;
-                size_t ggml_idx    = head_dim * n_patch + patch;
-                out[ggml_idx] = flat_data[pytorch_idx];
-            }
-        }
-    } else {
-        // 3D Tensor: GGML [d_head, n_head, n_patch] vs PyTorch [n_patch, n_head, d_head]
-        const int d_head  = d0;
-        const int n_head  = d1;
-        const int n_patch = d2;
-
-        for (int patch = 0; patch < n_patch; patch++) {
-            for (int head = 0; head < n_head; head++) {
-                for (int head_dim = 0; head_dim < d_head; head_dim++) {
-                    size_t pytorch_idx = patch * (n_head * d_head) + head * d_head + head_dim;
-                    size_t ggml_idx    = head_dim * (n_head * n_patch) + head * n_patch + patch;
-                    out[ggml_idx] = flat_data[pytorch_idx];
-                }
-            }
-        }
-    }
-}
 
 //#define CLIP_DEBUG_FUNCTIONS
 
@@ -337,9 +153,6 @@ static void clip_image_convert_f32_to_u8(const clip_image_f32& src, clip_image_u
     }
 }
 #endif
-
-
-
 
 //
 // clip layers
@@ -4308,13 +4121,17 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
 
     if (ctx->debug_graph) {
         log_params_t params = create_default_log_params();
-            
+
+        // Create a random output dir once per run (timestamp prefix optional)
+        // const std::string base = "/Users/andrei/Documents/GitHub/jina-llama.cpp/jina_embeddings/temp";
+        // const std::string random_dir = utils_make_random_subdir(base, /*add_timestamp=*/true);
+
         for (size_t i = 0; i < ctx->debug_print_tensors.size(); i++) {
             ggml_tensor * t = ctx->debug_print_tensors[i];
 
             // Apply name filter
             if (
-                strstr(t->name, "inp_raw") ||
+                // strstr(t->name, "inp_raw") ||
                 strstr(t->name, "patch_embeddings_final") ||
                 strstr(t->name, "norm1") ||
                 strstr(t->name, "attn_out") ||
@@ -4326,13 +4143,16 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 strstr(t->name, "post_norm") ||
                 strstr(t->name, "image_embeddings")
             ) {
-                try {
-                    log_to_file_or_console_parameterized(nullptr, t, &params);
-                } catch (const std::exception& e) {
-                    printf("ERROR logging tensor %s: %s\n", t->name, e.what());
-                } catch (...) {
-                    printf("UNKNOWN ERROR logging tensor %s\n", t->name);
-                }
+                // old way:
+                log_to_file_or_console_parameterized(nullptr, t, &params);
+
+                // new way: dump to bin file inside random dir
+                // std::string filename = random_dir + "/" + std::string(t->name) + ".bin";
+                // if (!write_tensor_lightbin(filename.c_str(), t)) {
+                //     printf("ERROR writing tensor %s\n", t->name);
+                // } else {
+                //     printf("Wrote tensor %s -> %s\n", t->name, filename.c_str());
+                // }
             }
         }
     }

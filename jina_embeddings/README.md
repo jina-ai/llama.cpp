@@ -15,7 +15,7 @@ cmake --build build --config Release
 Compile on Mac (gpu).
 ```bash
 cmake -B build -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=Apple -DGGML_METAL=ON
-cmake --build build --config Release -j 
+cmake --build build --config Release
 ```
 
 # Mteb eval
@@ -23,6 +23,8 @@ You can donwload model files and mmproj like so:
 ```
 cd llama.cpp
 huggingface-cli download jinaai/jina-embeddings-v4-text-retrieval-GGUF --include jina-embeddings-v4-text-retrieval-F16.gguf --local-dir gguf-models
+huggingface-cli download jinaai/jina-embeddings-v4-text-retrieval-GGUF --include jina-embeddings-v4-text-retrieval-Q4_K_M.gguf  --local-dir gguf-models
+huggingface-cli download jinaai/jina-embeddings-v4-text-retrieval-GGUF --include jina-embeddings-v4-text-retrieval-IQ4_XS.gguf --local-dir gguf-models
 huggingface-cli download jinaai/jina-embeddings-v4-text-retrieval-GGUF --include mmproj-jina-embeddings-v4-retrieval-BF16.gguf --local-dir gguf-models
 ```
 We recommend using the BF16 mmproj file since currently there seems to be a problem with the F16 mmproj that produces NaN embeddings on some Vidore benchmarks.
@@ -31,9 +33,9 @@ We recommend using the BF16 mmproj file since currently there seems to be a prob
 cd llama.cpp
 python jina_embeddings/eval_mteb.py \
 	--llama-bin build/bin/llama-server \
-	--model "$PWD/gguf-models/jina-embeddings-v4-text-retrieval-F16.gguf" \
+	--model "$PWD/gguf-models/jina-embeddings-v4-text-retrieval-IQ4_XS.gguf" \
 	--mmproj "$PWD/gguf-models/mmproj-jina-embeddings-v4-retrieval-BF16.gguf" \
-	--tasks VidoreSyntheticDocQAEnergyRetrieval \
+	--tasks VidoreTatdqaRetrieval \
 	--output-dir jev4-gguf-vidore \
 	--gpus 0 \
 	--no-logging \
@@ -47,19 +49,35 @@ To get the name of all Vidore tasks, run:
 python -c "import mteb; tasks = mteb.get_tasks(); print([t.metadata.name for t in tasks if 'chart' in t.metadata.name.lower() or 'vidore' in t.metadata.name.lower()])"
 ```
 
-# Inference example
+# Inference examples
+
+Infer cosine similarity between multiple samples:
 ```bash
 cd llama.cpp
-python jina_embeddings/infer_cosine.py   \
-    --llama-bin llama.cpp/build/bin/llama-server   \
-	--model gguf-models/jev4-bf16.gguf \
-    --mmproj gguf-models/mmproj-jina-embeddings-v4-retrieval-BF16.gguf \
+export MTMD_DEBUG_GRAPH=1 # used for debug and saving tensors to dir
+python jina_embeddings/infer_cosine.py \
+    --llama-bin build/bin/llama-server \
+    --model "$PWD/gguf-models/jina-embeddings-v4-text-retrieval-F16.gguf" \
+    --mmproj "$PWD/gguf-models/mmproj-jina-embeddings-v4-retrieval-BF16.gguf" \
     --gpus 0 \
-    --input jina_embeddings/assets/test_data.txt   \
-    --output jev4_cosine_results.md   \
-    --query-prefix "Query: "   \
-    --document-prefix "Passage: "   \
+    --input jina_embeddings/assets/test_data.txt \
+    --output jina_embeddings/temp/cosine_results.md \
+    --query-prefix "Query: " \
+    --document-prefix "Passage: " \
     --normalize
+```
+
+Single-image embedding to .npy:
+```bash
+cd llama.cpp
+python jina_embeddings/infer_image.py \
+    --llama-bin build/bin/llama-server \
+    --model "$PWD/gguf-models/jina-embeddings-v4-text-retrieval-F16.gguf" \
+    --mmproj "$PWD/gguf-models/mmproj-jina-embeddings-v4-retrieval-BF16.gguf" \
+    --hf-model-name "jinaai/jina-embeddings-v4" \
+    --output-base jina_embeddings/temp/saved_embeddings \
+    --gpus 0 \
+    jina_embeddings/assets/dog.jpg
 ```
 
 # Conversion
@@ -78,3 +96,22 @@ python convert_hf_to_gguf.py jev4-retrieval \
     --outtype bf16 \
     --mmproj
 ```
+
+---
+
+Generate and save embeddings with the pytorch model
+```bash
+python -m jina-embeddings-v4.infer_image \
+    jina-embeddings-v4/assets/jina_embeddings_v4_perf_table.jpg \
+    --output-base jina-embeddings-v4/temp
+```
+
+Generate heatmaps from llama.cpp & pytorch generated embeddings
+```bash
+python -m jina-embeddings-v4.heatmap_compare \
+    jina-embeddings-v4/temp/jina_embeddings_v4_perf_table-20250827-132816.npy  \
+    jina-embeddings-v4/temp/torch_jina_embeddings_v4_perf_table-20250827-043814.npy \
+    jina-embeddings-v4/assets/jina_embeddings_v4_perf_table.jpg \
+    --hf-model-name jinaai/jina-embeddings-v4 
+```
+
