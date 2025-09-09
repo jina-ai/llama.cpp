@@ -1,1 +1,0 @@
-[IMAGE] jina_embeddings/assets/beach.jpg
