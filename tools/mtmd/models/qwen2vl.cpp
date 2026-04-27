@@ -1,11 +1,11 @@
 #include "models.h"
 
 ggml_cgraph * clip_graph_qwen2vl::build() {
-    GGML_ASSERT(model.patch_bias == nullptr);
     GGML_ASSERT(model.class_embedding == nullptr);
 
     const int batch_size       = 1;
-    const bool use_window_attn = hparams.n_wa_pattern > 0;
+    // n_wa_pattern == 1 means every layer is full attention, i.e. no windowing.
+    const bool use_window_attn = hparams.n_wa_pattern > 1;
     const int n_wa_pattern     = hparams.n_wa_pattern;
     const int n_pos            = n_patches;
     const int num_position_ids = n_pos * 4; // m-rope requires 4 dim per position
@@ -38,6 +38,12 @@ ggml_cgraph * clip_graph_qwen2vl::build() {
         inp = ggml_cont_3d(
             ctx0, inp,
             n_embd, n_patches_x * n_patches_y, batch_size);
+    }
+
+    // Some Qwen2.5-style exports include patch embedding bias.
+    if (model.patch_bias != nullptr) {
+        inp = ggml_add(ctx0, inp, model.patch_bias);
+        cb(inp, "patch_bias", -1);
     }
 
     ggml_tensor * inpL           = inp;

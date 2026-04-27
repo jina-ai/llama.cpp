@@ -317,6 +317,39 @@ struct mtmd_context {
                     // <|vision_start|> ... (image embeddings) ... <|vision_end|>
                     img_beg = "<|vision_start|>";
                     img_end = "<|vision_end|>";
+                    // Some text decoders that share the Qwen3-VL vision tower do
+                    // NOT include the Qwen special wrapper tokens in their
+                    // tokenizer (e.g. jinaai omni-nano uses EuroBERT text with
+                    // a single `<image>` placeholder). When the wrappers don't
+                    // exist in the text vocab they get BPE-split into garbage
+                    // subword ids, which pollutes the multimodal sequence and
+                    // destroys the pooled embedding. Clear them in that case.
+                    {
+                        const llama_vocab * vocab = llama_model_get_vocab(text_model);
+                        auto wrapper_is_single_special = [&](const std::string & s) {
+                            if (s.empty()) return false;
+                            int n = (int)s.size() + 2;
+                            std::vector<llama_token> tmp(n);
+                            int r = llama_tokenize(vocab, s.data(), (int)s.size(),
+                                                   tmp.data(), n,
+                                                   /*add_special*/ false,
+                                                   /*parse_special*/ true);
+                            if (r < 0) return false;
+                            return r == 1;
+                        };
+                        if (!wrapper_is_single_special(img_beg)) {
+                            LOG_WRN("%s: text vocab does not recognise '%s' as a special token; "
+                                    "clearing Qwen image-begin wrapper to avoid BPE-splitting.\n",
+                                    __func__, img_beg.c_str());
+                            img_beg.clear();
+                        }
+                        if (!wrapper_is_single_special(img_end)) {
+                            LOG_WRN("%s: text vocab does not recognise '%s' as a special token; "
+                                    "clearing Qwen image-end wrapper to avoid BPE-splitting.\n",
+                                    __func__, img_end.c_str());
+                            img_end.clear();
+                        }
+                    }
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_YOUTUVL:

@@ -1840,6 +1840,16 @@ struct clip_model_loader {
                     model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
                     model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
                     model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                    // Some exported Qwen2.5-style mmproj files carry an incorrect
+                    // projection_dim metadata value; prefer the actual projector tensor.
+                    if (model.mm_1_w != nullptr) {
+                        const int32_t mm_proj_dim = static_cast<int32_t>(model.mm_1_w->ne[1]);
+                        if (hparams.projection_dim != mm_proj_dim) {
+                            LOG_WRN("%s: projection_dim mismatch (meta=%d, mm_1_w=%d) -> using tensor shape\n",
+                                __func__, hparams.projection_dim, mm_proj_dim);
+                            hparams.projection_dim = mm_proj_dim;
+                        }
+                    }
                 } break;
             case PROJECTOR_TYPE_QWEN3VL:
                 {
@@ -3168,9 +3178,25 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
 
     auto set_input_f32 = [&get_inp_tensor](const char * name, std::vector<float> & values) {
         ggml_tensor * cur = get_inp_tensor(name);
-        GGML_ASSERT(cur->type == GGML_TYPE_F32);
-        GGML_ASSERT(ggml_nelements(cur) == (int64_t)values.size());
-        ggml_backend_tensor_set(cur, values.data(), 0, ggml_nbytes(cur));
+        const int64_t expected = ggml_nelements(cur);
+        const int64_t got = static_cast<int64_t>(values.size());
+        if (expected != got) {
+            GGML_ABORT("Input tensor size mismatch for %s: expected %" PRId64 ", got %" PRId64 " (type=%s)",
+                name, expected, got, ggml_type_name(cur->type));
+        }
+        if (cur->type == GGML_TYPE_F32) {
+            ggml_backend_tensor_set(cur, values.data(), 0, ggml_nbytes(cur));
+            return;
+        }
+        if (cur->type == GGML_TYPE_F16) {
+            std::vector<ggml_fp16_t> values_f16(values.size());
+            for (size_t i = 0; i < values.size(); ++i) {
+                values_f16[i] = ggml_fp32_to_fp16(values[i]);
+            }
+            ggml_backend_tensor_set(cur, values_f16.data(), 0, ggml_nbytes(cur));
+            return;
+        }
+        GGML_ABORT("Unsupported input tensor type for %s: %s", name, ggml_type_name(cur->type));
     };
 
     auto set_input_i32 = [&get_inp_tensor](const char * name, std::vector<int32_t> & values) {
@@ -3364,7 +3390,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
             {
                 // pw * ph = number of tokens output by ViT after apply patch merger
                 // ipw * ipw = number of vision token been processed inside ViT
-                const bool use_window_attn = ctx->model.proj_type == PROJECTOR_TYPE_QWEN25VL ? hparams.n_wa_pattern > 0 : !hparams.wa_layer_indexes.empty();
+                const bool use_window_attn = ctx->model.proj_type == PROJECTOR_TYPE_QWEN25VL ? hparams.n_wa_pattern > 1 : !hparams.wa_layer_indexes.empty();
                 const int merge_ratio = 2;
                 const int pw  = image_size_width  / patch_size / merge_ratio;
                 const int ph  = image_size_height / patch_size / merge_ratio;
@@ -3775,6 +3801,24 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         float variance = (sum_sq / emb_data.size()) - (mean * mean);
         LOG_INF("Stats: mean=%.6f, std=%.6f, min=%.6f, max=%.6f, sum=%.6f\n",
                 mean, sqrtf(variance), min_val, max_val, sum);
+
+        // Optional binary dump for offline parity work. Set MTMD_DEBUG_DUMP_PATH to
+        // an absolute file path. Format: int64 n_embd, int64 n_tokens, then raw f32.
+        if (const char * dump_path = std::getenv("MTMD_DEBUG_DUMP_PATH")) {
+            FILE * fp = std::fopen(dump_path, "wb");
+            if (fp != nullptr) {
+                int64_t hdr[2] = {n_embd, n_tokens};
+                std::fwrite(hdr, sizeof(int64_t), 2, fp);
+                std::fwrite(emb_data.data(), sizeof(float), emb_data.size(), fp);
+                std::fclose(fp);
+                LOG_INF("Dumped raw embeddings to %s (header: int64 n_embd=%lld, "
+                        "int64 n_tokens=%lld; payload: %zu f32 values)\n",
+                        dump_path, (long long)n_embd, (long long)n_tokens, emb_data.size());
+            } else {
+                LOG_WRN("MTMD_DEBUG_DUMP_PATH set but fopen('%s', 'wb') failed\n", dump_path);
+            }
+        }
+
         LOG_INF("=== END MTMD_DEBUG_EMBEDDINGS ===\n\n");
     }
 
