@@ -10,9 +10,11 @@
 #include "mtmd.h"
 #include "mtmd-helper.h"
 #include "llama.h"
+#include "../../src/llama-model.h"
 
 #include <algorithm>
 #include <cinttypes>
+#include <cstring>
 #include <vector>
 
 //#define MTMD_AUDIO_DEBUG
@@ -232,6 +234,184 @@ struct decode_embd_batch {
     }
 };
 
+static bool mtmd_lookup_token_embedding(
+        const ggml_tensor * token_embd,
+        llama_token token_id,
+        int32_t n_embd,
+        float * dst) {
+    if (token_embd == nullptr || dst == nullptr) {
+        return false;
+    }
+    if (token_embd->ne[1] <= 0) {
+        return false;
+    }
+    if (token_embd->ne[0] != n_embd) {
+        return false;
+    }
+    if (token_id < 0 || (int64_t) token_id >= token_embd->ne[1]) {
+        return false;
+    }
+
+    const int64_t base = (int64_t) token_id * n_embd;
+    for (int32_t i = 0; i < n_embd; ++i) {
+        dst[i] = ggml_get_f32_1d(token_embd, base + i);
+    }
+    return true;
+}
+
+static int32_t mtmd_helper_eval_chunks_encoder(
+        mtmd_context * ctx,
+        struct llama_context * lctx,
+        const mtmd_input_chunks * chunks,
+        llama_pos n_past,
+        llama_seq_id seq_id,
+        bool logits_last,
+        llama_pos * new_n_past) {
+    const llama_model * model = llama_get_model(lctx);
+    const int32_t n_embd = llama_model_n_embd_inp(model);
+    const bool use_mrope = mtmd_decode_use_mrope(ctx);
+    const int32_t n_pos_per_embd = use_mrope ? 4 : 1;
+    const int32_t n_tokens_total = (int32_t) mtmd_helper_get_n_tokens(chunks);
+    if (n_tokens_total <= 0) {
+        *new_n_past = n_past;
+        return 0;
+    }
+
+    const ggml_tensor * token_embd = model->get_tensor("token_embd.weight");
+    if (token_embd == nullptr) {
+        LOG_ERR("encoder multimodal path: missing tensor token_embd.weight\n");
+        return 1;
+    }
+
+    std::vector<float> embd((size_t) n_tokens_total * n_embd, 0.0f);
+    std::vector<llama_pos> pos((size_t) n_tokens_total * n_pos_per_embd, 0);
+    std::vector<int32_t> n_seq_id(n_tokens_total, 1);
+    std::vector<llama_seq_id> seq_id_0(1, seq_id);
+    std::vector<llama_seq_id *> seq_ids(n_tokens_total, seq_id_0.data());
+    std::vector<int8_t> logits(n_tokens_total, false);
+    if (logits_last) {
+        logits[n_tokens_total - 1] = true;
+    }
+
+    auto set_pos_1d = [&](int32_t i_tok, llama_pos p) {
+        if (!use_mrope) {
+            pos[i_tok] = p;
+            return;
+        }
+        pos[i_tok]                    = p;
+        pos[i_tok + n_tokens_total]   = p;
+        pos[i_tok + n_tokens_total*2] = p;
+        pos[i_tok + n_tokens_total*3] = p;
+    };
+    auto set_pos_mrope_2d = [&](int32_t i_tok, const mtmd_decoder_pos & rel) {
+        GGML_ASSERT(use_mrope);
+        pos[i_tok]                    = rel.t;
+        pos[i_tok + n_tokens_total]   = rel.y;
+        pos[i_tok + n_tokens_total*2] = rel.x;
+        pos[i_tok + n_tokens_total*3] = rel.z;
+    };
+
+    int32_t tok_offset = 0;
+    llama_pos cur_pos = n_past;
+
+    const size_t n_chunks = mtmd_input_chunks_size(chunks);
+    for (size_t i = 0; i < n_chunks; ++i) {
+        const mtmd_input_chunk * chunk = mtmd_input_chunks_get(chunks, i);
+        const auto chunk_type = mtmd_input_chunk_get_type(chunk);
+
+        if (chunk_type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
+            size_t n_text_tokens = 0;
+            const llama_token * tokens = mtmd_input_chunk_get_tokens_text(chunk, &n_text_tokens);
+            for (size_t j = 0; j < n_text_tokens; ++j) {
+                if (tok_offset >= n_tokens_total) {
+                    LOG_ERR("encoder multimodal path: token buffer overflow (text)\n");
+                    return 1;
+                }
+                float * dst = embd.data() + (size_t) tok_offset * n_embd;
+                if (!mtmd_lookup_token_embedding(token_embd, tokens[j], n_embd, dst)) {
+                    LOG_ERR("encoder multimodal path: failed token embedding lookup for token=%d\n", (int) tokens[j]);
+                    return 1;
+                }
+                set_pos_1d(tok_offset, cur_pos + (llama_pos) j);
+                ++tok_offset;
+            }
+            cur_pos += mtmd_input_chunk_get_n_pos(chunk);
+            continue;
+        }
+
+        if (chunk_type != MTMD_INPUT_CHUNK_TYPE_IMAGE && chunk_type != MTMD_INPUT_CHUNK_TYPE_AUDIO) {
+            LOG_ERR("encoder multimodal path: unsupported chunk type\n");
+            return 1;
+        }
+
+        const char * name = chunk_type == MTMD_INPUT_CHUNK_TYPE_IMAGE ? "image" : "audio";
+        LOG_INF("encoder multimodal path: encoding %s slice...\n", name);
+
+        int32_t ret = mtmd_encode_chunk(ctx, chunk);
+        if (ret != 0) {
+            LOG_ERR("encoder multimodal path: failed to encode %s slice\n", name);
+            return ret;
+        }
+
+        float * enc = mtmd_get_output_embd(ctx);
+        const int32_t n_chunk_tokens = (int32_t) mtmd_input_chunk_get_n_tokens(chunk);
+        const size_t n_vals = (size_t) n_chunk_tokens * n_embd;
+        if (tok_offset + n_chunk_tokens > n_tokens_total) {
+            LOG_ERR("encoder multimodal path: token buffer overflow (%s)\n", name);
+            return 1;
+        }
+        std::memcpy(
+            embd.data() + (size_t) tok_offset * n_embd,
+            enc,
+            n_vals * sizeof(float));
+
+        if (use_mrope && chunk_type == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
+            const auto image_tokens = mtmd_input_chunk_get_tokens_image(chunk);
+            if (!image_tokens) {
+                LOG_ERR("encoder multimodal path: image tokens are null\n");
+                return 1;
+            }
+            std::vector<mtmd_decoder_pos> rel_pos((size_t) n_chunk_tokens);
+            mtmd_helper_image_get_decoder_pos(image_tokens, cur_pos, rel_pos.data());
+            for (int32_t j = 0; j < n_chunk_tokens; ++j) {
+                set_pos_mrope_2d(tok_offset + j, rel_pos[(size_t) j]);
+            }
+        } else {
+            for (int32_t j = 0; j < n_chunk_tokens; ++j) {
+                set_pos_1d(tok_offset + j, cur_pos + j);
+            }
+        }
+
+        tok_offset += n_chunk_tokens;
+        cur_pos += mtmd_input_chunk_get_n_pos(chunk);
+    }
+
+    if (tok_offset != n_tokens_total) {
+        LOG_ERR("encoder multimodal path: token count mismatch (expected=%d got=%d)\n", n_tokens_total, tok_offset);
+        return 1;
+    }
+
+    llama_batch batch = {
+        /* n_tokens */ n_tokens_total,
+        /* token    */ nullptr,
+        /* embd     */ embd.data(),
+        /* pos      */ pos.data(),
+        /* n_seq_id */ n_seq_id.data(),
+        /* seq_id   */ seq_ids.data(),
+        /* logits   */ logits.data(),
+    };
+
+    LOG_INF("encoder multimodal path: decoding combined batch with %d tokens\n", n_tokens_total);
+    int32_t ret = llama_decode(lctx, batch);
+    if (ret != 0) {
+        LOG_ERR("encoder multimodal path: combined decode failed\n");
+        return ret;
+    }
+
+    *new_n_past = cur_pos;
+    return 0;
+}
+
 // Helper function for decoding an image whose embeddings have already been calculated
 int32_t mtmd_helper_decode_image_chunk(
         mtmd_context * ctx,
@@ -399,6 +579,35 @@ int32_t mtmd_helper_eval_chunks(mtmd_context * ctx,
     if (n_chunks == 0) {
         LOG_WRN("no chunks to eval\n");
         return 0;
+    }
+
+    // Encoder-only text models have no persistent KV/recurrent memory between
+    // llama_decode calls. If multimodal chunks are decoded one-by-one, image
+    // context is dropped before the final pooled token is produced.
+    //
+    // For this case, build one combined embedding batch across all chunks and
+    // run a single llama_decode call.
+    bool has_media = false;
+    for (size_t i = 0; i < n_chunks; ++i) {
+        auto chunk = mtmd_input_chunks_get(chunks, i);
+        auto type = mtmd_input_chunk_get_type(chunk);
+        if (type == MTMD_INPUT_CHUNK_TYPE_IMAGE || type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
+            has_media = true;
+            break;
+        }
+    }
+    if (has_media && llama_get_memory(lctx) == nullptr) {
+        LOG_INF("encoder multimodal path: enabled (no llama memory)\n");
+        int32_t res = mtmd_helper_eval_chunks_encoder(ctx, lctx, chunks, n_past, seq_id, logits_last, &n_past);
+        if (res != 0) {
+            LOG_ERR("failed to eval encoder multimodal chunks\n");
+            return res;
+        }
+        *new_n_past = n_past;
+        return 0;
+    }
+    if (has_media) {
+        LOG_INF("encoder multimodal path: skipped (llama memory present)\n");
     }
 
     for (size_t i = 0; i < n_chunks; i++) {

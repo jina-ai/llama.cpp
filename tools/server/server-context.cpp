@@ -2599,6 +2599,10 @@ private:
 
                     bool has_mtmd = false;
 
+                    const bool encoder_mtmd_embd_mode = mctx != nullptr
+                        && llama_get_memory(ctx) == nullptr
+                        && slot.task->need_embd();
+
                     // check if we should process the image
                     while (slot.prompt.n_tokens() < slot.task->n_tokens() && input_tokens[slot.prompt.n_tokens()] == LLAMA_TOKEN_NULL) {
                         // process the image
@@ -2620,6 +2624,25 @@ private:
                         }
 
                         has_mtmd = true;
+
+                        if (encoder_mtmd_embd_mode) {
+                            // server_tokens::process_chunk() already ran a single combined
+                            // decode over the full prompt for encoder-only multimodal models.
+                            // Consume remaining prompt tokens without additional decode calls.
+                            while (slot.prompt.n_tokens() < slot.task->n_tokens()) {
+                                const llama_token next_tok = input_tokens[slot.prompt.n_tokens()];
+                                if (next_tok == LLAMA_TOKEN_NULL) {
+                                    const auto & rem_chunk = input_tokens.find_chunk(slot.prompt.n_tokens());
+                                    const size_t rem_n = mtmd_input_chunk_get_n_tokens(rem_chunk.get());
+                                    slot.prompt.tokens.push_back(rem_chunk.get());
+                                    slot.n_prompt_tokens_processed += rem_n;
+                                } else {
+                                    slot.prompt.tokens.push_back(next_tok);
+                                    slot.n_prompt_tokens_processed++;
+                                }
+                            }
+                            break;
+                        }
                     }
 
                     // add prompt tokens for processing in the current batch
@@ -2676,6 +2699,30 @@ private:
                     // entire prompt has been processed
                     if (slot.prompt.n_tokens() == slot.task->n_tokens()) {
                         slot.state = SLOT_STATE_DONE_PROMPT;
+
+                        if (encoder_mtmd_embd_mode && batch.n_tokens == 0 && slot.task->type == SERVER_TASK_TYPE_EMBEDDING) {
+                            // Encoder-only multimodal path decoded the full prompt
+                            // inside server_tokens::process_chunk(). No additional
+                            // main-batch decode is needed, but we still need to send
+                            // embedding output for this slot.
+                            llama_seq_id fake_seq_id = slot.id;
+                            llama_seq_id * fake_seq_id_ptr = &fake_seq_id;
+                            int32_t fake_n_seq_id = 1;
+                            int8_t fake_logits = 1;
+                            llama_batch fake_batch = {
+                                /* n_tokens */ 1,
+                                /* token    */ nullptr,
+                                /* embd     */ nullptr,
+                                /* pos      */ nullptr,
+                                /* n_seq_id */ &fake_n_seq_id,
+                                /* seq_id   */ &fake_seq_id_ptr,
+                                /* logits   */ &fake_logits,
+                            };
+                            send_embedding(slot, fake_batch);
+                            slot.release();
+                            slot.i_batch = -1;
+                            continue;
+                        }
 
                         GGML_ASSERT(batch.n_tokens > 0);
 

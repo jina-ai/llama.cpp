@@ -2,6 +2,7 @@
 #include "download.h"
 #include "log.h"
 #include "llama.h"
+#include "../../src/llama-model.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
 #include "chat.h"
@@ -12,6 +13,7 @@
 #include <random>
 #include <sstream>
 #include <fstream>
+#include <cstring>
 
 json format_error_response(const std::string & message, const enum error_type type) {
     std::string type_str;
@@ -542,8 +544,149 @@ int32_t server_tokens::process_chunk(
     const char * name = mtmd_input_chunk_get_type(chunk.get()) == MTMD_INPUT_CHUNK_TYPE_IMAGE
                         ? "image" : "audio";
     SRV_INF("processing %s...\n", name);
-    int32_t n_batch = llama_n_batch(ctx);
     int64_t t0 = ggml_time_ms();
+
+    // Encoder-only text models have no persistent memory between decode calls.
+    // For multimodal requests, server-side chunk-by-chunk decode drops image context.
+    // Build and decode one combined embedding batch for the whole prompt.
+    if (has_mtmd && llama_get_memory(ctx) == nullptr) {
+        const llama_model * model = llama_get_model(ctx);
+        const int32_t n_embd = llama_model_n_embd_inp(model);
+        const int32_t n_tokens_total = (int32_t) tokens.size();
+        // Important: for encoder-only text backbones (EuroBERT/BERT-like),
+        // the torch reference path uses regular 1D position_ids when image
+        // features are spliced into inputs_embeds. Even if the vision projector
+        // is Qwen-VL-derived, applying MTMD M-RoPE packing here causes semantic
+        // drift vs the model's native embedding path.
+        const bool use_mrope = false;
+        const int32_t n_pos_per_embd = use_mrope ? 4 : 1;
+        const ggml_tensor * tok_embd = model->get_tensor("token_embd.weight");
+        if (tok_embd == nullptr) {
+            LOG_ERR("encoder multimodal path: missing token_embd.weight\n");
+            n_tokens_out = 0;
+            return 1;
+        }
+        if (tok_embd->ne[0] != n_embd || tok_embd->ne[1] <= 0) {
+            LOG_ERR("encoder multimodal path: unexpected token_embd.weight shape\n");
+            n_tokens_out = 0;
+            return 1;
+        }
+
+        std::vector<float> embd((size_t) n_tokens_total * n_embd, 0.0f);
+        std::vector<llama_pos> pos_vec((size_t) n_tokens_total * n_pos_per_embd, 0);
+        std::vector<int32_t> n_seq_id(n_tokens_total, 1);
+        std::vector<llama_seq_id> seq_id_0(1, seq_id);
+        std::vector<llama_seq_id *> seq_ids(n_tokens_total, seq_id_0.data());
+        std::vector<int8_t> logits(n_tokens_total, false);
+        if (!logits.empty()) {
+            logits.back() = true;
+        }
+
+        auto set_pos_1d = [&](int32_t i_tok, llama_pos p) {
+            if (!use_mrope) {
+                pos_vec[i_tok] = p;
+                return;
+            }
+            pos_vec[i_tok]                      = p;
+            pos_vec[i_tok + n_tokens_total]     = p;
+            pos_vec[i_tok + n_tokens_total * 2] = p;
+            pos_vec[i_tok + n_tokens_total * 3] = p;
+        };
+        auto set_pos_2d = [&](int32_t i_tok, const mtmd_decoder_pos & rel) {
+            GGML_ASSERT(use_mrope);
+            pos_vec[i_tok]                      = rel.t;
+            pos_vec[i_tok + n_tokens_total]     = rel.y;
+            pos_vec[i_tok + n_tokens_total * 2] = rel.x;
+            pos_vec[i_tok + n_tokens_total * 3] = rel.z;
+        };
+
+        const llama_pos pos_0 = pos - pos_next((int64_t) idx);
+        llama_pos cur_pos = pos_0;
+
+        for (size_t i = 0; i < tokens.size();) {
+            const llama_token tok = tokens[i];
+            if (tok != LLAMA_TOKEN_NULL) {
+                if (tok < 0 || (int64_t) tok >= tok_embd->ne[1]) {
+                    LOG_ERR("encoder multimodal path: token id out of bounds: %d\n", (int) tok);
+                    n_tokens_out = 0;
+                    return 1;
+                }
+                float * dst = embd.data() + i * n_embd;
+                const int64_t base = (int64_t) tok * n_embd;
+                for (int32_t j = 0; j < n_embd; ++j) {
+                    dst[j] = ggml_get_f32_1d(tok_embd, base + j);
+                }
+                set_pos_1d((int32_t) i, cur_pos);
+                ++cur_pos;
+                ++i;
+                continue;
+            }
+
+            const auto & media_chunk = find_chunk(i);
+            const int32_t n_chunk_tokens = (int32_t) mtmd_input_chunk_get_n_tokens(media_chunk.get());
+            const auto chunk_type = mtmd_input_chunk_get_type(media_chunk.get());
+
+            int32_t enc_ret = mtmd_encode_chunk(mctx, media_chunk.get());
+            if (enc_ret != 0) {
+                LOG_ERR("encoder multimodal path: failed to encode chunk\n");
+                n_tokens_out = 0;
+                return enc_ret;
+            }
+            float * enc = mtmd_get_output_embd(mctx);
+            std::memcpy(
+                embd.data() + i * n_embd,
+                enc,
+                (size_t) n_chunk_tokens * n_embd * sizeof(float));
+
+            if (use_mrope && chunk_type == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
+                const auto image_tokens = mtmd_input_chunk_get_tokens_image(media_chunk.get());
+                if (!image_tokens) {
+                    LOG_ERR("encoder multimodal path: image tokens are null\n");
+                    n_tokens_out = 0;
+                    return 1;
+                }
+                std::vector<mtmd_decoder_pos> rel((size_t) n_chunk_tokens);
+                mtmd_helper_image_get_decoder_pos(image_tokens, cur_pos, rel.data());
+                for (int32_t j = 0; j < n_chunk_tokens; ++j) {
+                    set_pos_2d((int32_t) i + j, rel[(size_t) j]);
+                }
+            } else {
+                for (int32_t j = 0; j < n_chunk_tokens; ++j) {
+                    set_pos_1d((int32_t) i + j, cur_pos + j);
+                }
+            }
+
+            // For encoder-only models we are reconstructing the same path as
+            // torch `inputs_embeds` + 1D `position_ids`, where each token
+            // position advances by 1. Do not use MTMD compressed `n_pos`
+            // here (e.g. M-RoPE max(nx, ny)); that is for the decoder chunked
+            // path and shifts trailing text/EOS to incorrect positions.
+            cur_pos += n_chunk_tokens;
+            i += (size_t) n_chunk_tokens;
+        }
+
+        llama_batch batch = {
+            /* n_tokens */ n_tokens_total,
+            /* token    */ nullptr,
+            /* embd     */ embd.data(),
+            /* pos      */ pos_vec.data(),
+            /* n_seq_id */ n_seq_id.data(),
+            /* seq_id   */ seq_ids.data(),
+            /* logits   */ logits.data(),
+        };
+
+        int32_t result = llama_decode(ctx, batch);
+        SRV_INF("%s processed in %" PRId64 " ms (encoder combined decode)\n", name, ggml_time_ms() - t0);
+        if (result != 0) {
+            LOG_ERR("encoder multimodal combined decode failed with status %d", result);
+            n_tokens_out = 0;
+            return result;
+        }
+        n_tokens_out = mtmd_input_chunk_get_n_tokens(chunk.get());
+        return 0;
+    }
+
+    int32_t n_batch = llama_n_batch(ctx);
     llama_pos new_n_past; // unused for now
     int32_t result = mtmd_helper_eval_chunk_single(mctx, ctx,
         chunk.get(),
