@@ -1360,6 +1360,24 @@ struct clip_model_loader {
                         // ref: https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/blob/main/preprocessor_config.json
                         hparams.set_limit_image_tokens(8, 4096);
                         hparams.set_warmup_n_tokens(46*46); // avoid OOM on warmup
+                        // If the GGUF carries explicit min/max pixels (from preprocessor_config.json),
+                        // use those instead of the hardcoded defaults. This matches what torch's
+                        // Qwen2VLImageProcessor does, which is necessary for numerical parity on
+                        // images smaller than 90px or other extremes.
+                        int min_pixels = 0, max_pixels = 0;
+                        get_u32(KEY_IMAGE_MIN_PIXELS, min_pixels, false);
+                        get_u32(KEY_IMAGE_MAX_PIXELS, max_pixels, false);
+                        if (min_pixels > 0 && max_pixels > 0) {
+                            hparams.image_min_pixels = min_pixels;
+                            hparams.image_max_pixels = max_pixels;
+                            // qwen3vl graph asserts image dims % (patch_size * 2) == 0;
+                            // round warmup size down to the nearest multiple of 2*patch_size.
+                            const int align = hparams.patch_size * 2;
+                            int warmup = static_cast<int>(std::sqrt(max_pixels));
+                            warmup = (warmup / align) * align;
+                            if (warmup < align) warmup = align;
+                            hparams.warmup_image_size = warmup;
+                        }
                         const int warn_min_pixels = 1024 * hparams.n_merge * hparams.n_merge * hparams.patch_size * hparams.patch_size;
                         if (hparams.image_min_pixels < warn_min_pixels) {
                             LOG_WRN("%s: Qwen-VL models require at minimum 1024 image tokens to function correctly on grounding tasks\n", __func__);

@@ -4871,6 +4871,16 @@ class Qwen3VLVisionModel(MmprojModel):
             if merge_size is not None:
                 self.gguf_writer.add_vision_spatial_merge_size(int(merge_size))
 
+        # Carry image_min_pixels / image_max_pixels through from preprocessor_config.json
+        # so the runtime resize matches torch's Qwen2VLImageProcessor for small/large images.
+        # The runtime falls back to set_limit_image_tokens(8, 4096) if these are absent.
+        if self.preprocessor_config is not None:
+            min_pixels = self.preprocessor_config.get("min_pixels")
+            max_pixels = self.preprocessor_config.get("max_pixels")
+            if min_pixels is not None and max_pixels is not None:
+                self.gguf_writer.add_vision_min_pixels(int(min_pixels))
+                self.gguf_writer.add_vision_max_pixels(int(max_pixels))
+
         # Use text config's rms_norm_eps for vision attention layernorm eps
         rms_norm_eps = self.global_config.get("text_config", {}).get("rms_norm_eps", 1e-6)
         self.gguf_writer.add_vision_attention_layernorm_eps(rms_norm_eps)
