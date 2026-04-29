@@ -4226,6 +4226,14 @@ class Qwen2VLVisionModel(MmprojModel):
             self.gguf_writer.add_vision_n_wa_pattern(n_wa_pattern)
         else:
             raise ValueError(f"Unknown QwenVL model type: {self.global_config['model_type']}")
+        # Carry image_min_pixels / image_max_pixels through from preprocessor_config.json
+        # so the runtime resize matches torch's Qwen2VLImageProcessor for small/large images.
+        if self.preprocessor_config is not None:
+            min_pixels = self.preprocessor_config.get("min_pixels")
+            max_pixels = self.preprocessor_config.get("max_pixels")
+            if min_pixels is not None and max_pixels is not None:
+                self.gguf_writer.add_vision_min_pixels(int(min_pixels))
+                self.gguf_writer.add_vision_max_pixels(int(max_pixels))
         # default values below are taken from HF tranformers code
         self.gguf_writer.add_vision_attention_layernorm_eps(self.global_config.get("rms_norm_eps", 1e-6))
 
