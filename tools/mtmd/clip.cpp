@@ -1354,7 +1354,10 @@ struct clip_model_loader {
                 case PROJECTOR_TYPE_QWEN3VL:
                     {
                         hparams.n_merge = 2; // default value for Qwen 2 and 2.5
-                        hparams.image_resize_algo = RESIZE_ALGO_BILINEAR;
+                        // Qwen2VLImageProcessor uses PIL bicubic (resample=3, i.e. PIL.BICUBIC).
+                        // Default RESIZE_ALGO_BILINEAR diverges from PIL on extreme upscale
+                        // (e.g. 32x32 -> 512x512 caps embedding cos at ~0.96 vs torch).
+                        hparams.image_resize_algo = RESIZE_ALGO_BICUBIC_PILLOW;
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
                         get_u32(KEY_WIN_ATTN_PATTERN, hparams.n_wa_pattern, model.proj_type == PROJECTOR_TYPE_QWEN25VL); // only 2.5 requires it
                         // ref: https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/blob/main/preprocessor_config.json
