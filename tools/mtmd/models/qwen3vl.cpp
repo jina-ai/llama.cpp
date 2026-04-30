@@ -13,15 +13,25 @@ ggml_cgraph * clip_graph_qwen3vl::build() {
 
     int mrope_sections[4] = {d_head/4, d_head/4, d_head/4, d_head/4};
 
-    ggml_tensor * inp_raw = build_inp_raw();
+    // Qwen3VL's patch_embed is a 3D conv with temporal_patch_size=2, decoupled
+    // here into two 2D convs (patch_embeddings_0 for frame_a, _1 for frame_b).
+    // Default image mode duplicates the same input into both convs (caller
+    // sets `inp_raw_b` = `inp_raw`); video frame-pair mode feeds distinct
+    // frames so the graph computes torch's `w0*frame_a + w1*frame_b` exactly.
+    ggml_tensor * inp_raw   = build_inp_raw();
+    ggml_tensor * inp_raw_b = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, img.nx, img.ny, 3);
+    ggml_set_name(inp_raw_b, "inp_raw_b");
+    ggml_set_input(inp_raw_b);
+
     ggml_tensor * inp = ggml_conv_2d(ctx0, model.patch_embeddings_0, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
 
     GGML_ASSERT(img.nx % (patch_size * 2) == 0);
     GGML_ASSERT(img.ny % (patch_size * 2) == 0);
 
-    // second conv dimension
+    // second conv dimension (acts on frame_b in video-pair mode, on the same
+    // image as the first conv in image mode).
     {
-        auto inp_1 = ggml_conv_2d(ctx0, model.patch_embeddings_1, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
+        auto inp_1 = ggml_conv_2d(ctx0, model.patch_embeddings_1, inp_raw_b, patch_size, patch_size, 0, 0, 1, 1);
         inp = ggml_add(ctx0, inp, inp_1);
 
         inp = ggml_permute(ctx0, inp, 1, 2, 0, 3);  // [w, h, c, b] -> [c, w, h, b]

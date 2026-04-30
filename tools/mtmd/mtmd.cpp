@@ -31,6 +31,14 @@ struct mtmd_bitmap {
     std::vector<unsigned char> data;
     std::string id; // optional user-defined id, for ex: can be set to image hash, useful for KV cache tracking
     bool is_audio = false; // true if the bitmap is audio
+
+    // Optional second-frame data for video temporal_patch_size=2 pairs.
+    // When non-empty: this bitmap represents a frame pair (frame_a in `data`,
+    // frame_b in `data_b`). nx/ny apply to BOTH frames (must be the same
+    // size). The Qwen3VL encoder graph applies patch_embeddings_0 to
+    // frame_a and patch_embeddings_1 to frame_b, then sums — exactly
+    // matching torch's 3D conv with kt=2. Empty by default → single image.
+    std::vector<unsigned char> data_b;
 };
 
 // position indexing for decoder model
@@ -788,6 +796,36 @@ struct mtmd_tokenizer {
                 return 2;
             }
 
+            // Video frame-pair handling (Qwen3VL temporal_patch_size=2):
+            // when the bitmap carries a second frame in `data_b`, run the same
+            // image preprocessor on it and copy the resulting `buf` into each
+            // f32 entry's `buf_b`. The encoder graph then applies
+            // patch_embeddings_0 to frame_a and patch_embeddings_1 to frame_b
+            // and sums (matches torch's 3D conv with kt=2). Both frames are
+            // preprocessed identically since they share (nx, ny).
+            if (!bitmap->data_b.empty()) {
+                GGML_ASSERT(bitmap->data_b.size() == bitmap->data.size());
+                clip_image_u8_ptr img_u8_b(clip_image_u8_init());
+                img_u8_b->nx = bitmap->nx;
+                img_u8_b->ny = bitmap->ny;
+                img_u8_b->buf.resize(bitmap->data_b.size());
+                std::memcpy(img_u8_b->buf.data(), bitmap->data_b.data(),
+                            img_u8_b->nx * img_u8_b->ny * 3);
+                clip_image_f32_batch batch_f32_b;
+                if (!ctx->image_preproc->preprocess(*img_u8_b, batch_f32_b)) {
+                    LOG_ERR("Unable to preprocess video frame_b\n");
+                    return 2;
+                }
+                if (batch_f32.entries.size() != batch_f32_b.entries.size()) {
+                    LOG_ERR("Frame_a and frame_b produced different batch sizes (%zu vs %zu)\n",
+                            batch_f32.entries.size(), batch_f32_b.entries.size());
+                    return 2;
+                }
+                for (size_t e = 0; e < batch_f32.entries.size(); ++e) {
+                    batch_f32.entries[e]->buf_b = std::move(batch_f32_b.entries[e]->buf);
+                }
+            }
+
             // handle llava-uhd style preprocessing
             const bool has_tiling_grid = batch_f32.grid_x > 0 && batch_f32.grid_y > 0;
             if (
@@ -1159,6 +1197,24 @@ mtmd_bitmap * mtmd_bitmap_init(uint32_t nx,
     size_t data_size = (size_t)nx * ny * 3;
     bitmap->data.resize(data_size);
     std::memcpy(bitmap->data.data(), data, data_size);
+    return bitmap;
+}
+
+// Initialize a video frame-pair bitmap (Qwen3VL temporal_patch_size=2). Both
+// frames must have identical (nx, ny). The encoder applies patch_embeddings_0
+// to data (frame_a) and patch_embeddings_1 to data_b (frame_b), then sums.
+mtmd_bitmap * mtmd_bitmap_init_from_video_pair(uint32_t nx,
+                                               uint32_t ny,
+                                               const unsigned char * data_a,
+                                               const unsigned char * data_b) {
+    mtmd_bitmap * bitmap = new mtmd_bitmap;
+    bitmap->nx = nx;
+    bitmap->ny = ny;
+    size_t data_size = (size_t)nx * ny * 3;
+    bitmap->data.resize(data_size);
+    bitmap->data_b.resize(data_size);
+    std::memcpy(bitmap->data.data(), data_a, data_size);
+    std::memcpy(bitmap->data_b.data(), data_b, data_size);
     return bitmap;
 }
 

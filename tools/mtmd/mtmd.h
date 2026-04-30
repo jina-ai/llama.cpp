@@ -136,6 +136,14 @@ MTMD_API int mtmd_get_audio_sample_rate(const mtmd_context * ctx);
 //     length of data must be n_samples * sizeof(float)
 //     the data is in float format (PCM F32)
 MTMD_API mtmd_bitmap *         mtmd_bitmap_init           (uint32_t nx, uint32_t ny, const unsigned char * data);
+// Video frame-pair bitmap for Qwen3VL temporal_patch_size=2: both frames
+// must already share identical (nx, ny). The encoder applies
+// patch_embeddings_0 to frame_a and patch_embeddings_1 to frame_b, then
+// sums (matches torch's 3D conv with kt=2).
+MTMD_API mtmd_bitmap *         mtmd_bitmap_init_from_video_pair(
+                                          uint32_t nx, uint32_t ny,
+                                          const unsigned char * data_a,
+                                          const unsigned char * data_b);
 MTMD_API mtmd_bitmap *         mtmd_bitmap_init_from_audio(size_t n_samples,         const float         * data);
 MTMD_API uint32_t              mtmd_bitmap_get_nx     (const mtmd_bitmap * bitmap);
 MTMD_API uint32_t              mtmd_bitmap_get_ny     (const mtmd_bitmap * bitmap);

@@ -717,6 +717,40 @@ mtmd_bitmap * mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigne
     return result;
 }
 
+// Decode two image-bytes buffers (PNG/JPEG/BMP/...) and bundle them into a
+// single video frame-pair bitmap. Both frames must decode to identical
+// (nx, ny) — caller is expected to have resized them already (typically via
+// the same processor used for torch's video preprocessing).
+mtmd_bitmap * mtmd_helper_bitmap_init_from_video_pair_buf(
+        mtmd_context * /*ctx*/,
+        const unsigned char * buf_a, size_t len_a,
+        const unsigned char * buf_b, size_t len_b) {
+    int nx_a, ny_a, nc_a;
+    int nx_b, ny_b, nc_b;
+    auto * data_a = stbi_load_from_memory(buf_a, len_a, &nx_a, &ny_a, &nc_a, 3);
+    if (!data_a) {
+        LOG_ERR("%s: failed to decode frame_a image bytes\n", __func__);
+        return nullptr;
+    }
+    auto * data_b = stbi_load_from_memory(buf_b, len_b, &nx_b, &ny_b, &nc_b, 3);
+    if (!data_b) {
+        stbi_image_free(data_a);
+        LOG_ERR("%s: failed to decode frame_b image bytes\n", __func__);
+        return nullptr;
+    }
+    if (nx_a != nx_b || ny_a != ny_b) {
+        stbi_image_free(data_a);
+        stbi_image_free(data_b);
+        LOG_ERR("%s: frame_a (%dx%d) and frame_b (%dx%d) must have identical dimensions\n",
+                __func__, nx_a, ny_a, nx_b, ny_b);
+        return nullptr;
+    }
+    mtmd_bitmap * result = mtmd_bitmap_init_from_video_pair(nx_a, ny_a, data_a, data_b);
+    stbi_image_free(data_a);
+    stbi_image_free(data_b);
+    return result;
+}
+
 mtmd_bitmap * mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char * fname) {
     std::vector<unsigned char> buf;
     FILE * f = fopen(fname, "rb");

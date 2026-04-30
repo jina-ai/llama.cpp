@@ -40,6 +40,17 @@ MTMD_API mtmd_bitmap * mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, con
 // this function is thread-safe
 MTMD_API mtmd_bitmap * mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigned char * buf, size_t len);
 
+// helper to construct a video frame-pair bitmap from two image buffers
+// (Qwen3VL temporal_patch_size=2). Both buffers must decode to the same
+// (nx, ny) — caller pre-sizes them (typically by mirroring torch's video
+// preprocessor on the python side).
+// returns nullptr on failure
+// this function is thread-safe
+MTMD_API mtmd_bitmap * mtmd_helper_bitmap_init_from_video_pair_buf(
+        mtmd_context * ctx,
+        const unsigned char * buf_a, size_t len_a,
+        const unsigned char * buf_b, size_t len_b);
+
 // helper to count the total number of tokens from a list of chunks, useful to keep track of KV cache
 MTMD_API size_t mtmd_helper_get_n_tokens(const mtmd_input_chunks * chunks);
 

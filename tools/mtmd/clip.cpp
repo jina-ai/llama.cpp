@@ -3278,6 +3278,35 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         }
         set_input_f32("inp_raw", inp_raw);
 
+        // Qwen3VL graph has a second 3-channel input tensor "inp_raw_b" used
+        // by the temporal_patch_size=2 patch_embed (3D conv decoupled into
+        // two 2D convs). For image mode (no `buf_b`), inp_raw_b is just a
+        // duplicate of inp_raw — the result is bit-equivalent to the prior
+        // single-input behavior. For video frame-pair mode, fill from buf_b.
+        if (ctx->model.proj_type == PROJECTOR_TYPE_QWEN3VL) {
+            std::vector<float> inp_raw_b(nelem);
+            for (size_t i = 0; i < imgs.entries.size(); i++) {
+                const int nx = imgs.entries[i]->nx;
+                const int ny = imgs.entries[i]->ny;
+                const int n  = nx * ny;
+                const auto & img = imgs.entries[i];
+                const std::vector<float> & src = img->buf_b.empty() ? img->buf : img->buf_b;
+                for (int b = 0; b < batch_size; b++) {
+                    float * batch_entry = inp_raw_b.data() + b * (3*n);
+                    for (int y = 0; y < ny; y++) {
+                        for (int x = 0; x < nx; x++) {
+                            const size_t base_src = 3*(y * nx + x);
+                            const size_t base_dst =    y * nx + x;
+                            batch_entry[      base_dst] = src[base_src    ];
+                            batch_entry[1*n + base_dst] = src[base_src + 1];
+                            batch_entry[2*n + base_dst] = src[base_src + 2];
+                        }
+                    }
+                }
+            }
+            set_input_f32("inp_raw_b", inp_raw_b);
+        }
+
     } else {
         // audio input
         GGML_ASSERT(imgs.entries.size() == 1);

@@ -913,16 +913,60 @@ static server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_co
         return server_tokens(tmp, false);
     } else if (json_prompt.contains(JSON_STRING_PROMPT_KEY)) {
         // JSON object with prompt key.
-        if (json_prompt.contains(JSON_MTMD_DATA_KEY)) {
+        constexpr char JSON_MTMD_VIDEOPAIR_KEY[] = "videopair_data";
+        if (json_prompt.contains(JSON_MTMD_DATA_KEY) || json_prompt.contains(JSON_MTMD_VIDEOPAIR_KEY)) {
             if (!has_mtmd)
                 throw std::runtime_error("Multimodal data provided, but model does not support multimodal requests.");
 
-            // JSON object with prompt and multimodal key.
-            std::vector<raw_buffer> files;
-            for (const auto & entry : json_prompt.at(JSON_MTMD_DATA_KEY)) {
-                files.push_back(base64_decode(entry));
+            // Build the bitmap list. `multimodal_data` items become normal
+            // image/audio bitmaps. `videopair_data` items are arrays of
+            // exactly 2 base64 entries (frame_a, frame_b) and become a single
+            // video-pair bitmap (Qwen3VL temporal_patch_size=2). Each pair
+            // still consumes one media marker in the prompt.
+            mtmd::bitmaps bitmaps;
+            if (json_prompt.contains(JSON_MTMD_DATA_KEY)) {
+                for (const auto & entry : json_prompt.at(JSON_MTMD_DATA_KEY)) {
+                    auto buf = base64_decode(entry);
+                    mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_buf(mctx, buf.data(), buf.size()));
+                    if (!bmp.ptr) {
+                        throw std::runtime_error("Failed to load image or audio file");
+                    }
+                    bmp.set_id(fnv_hash(bmp.data(), bmp.n_bytes()).c_str());
+                    bitmaps.entries.push_back(std::move(bmp));
+                }
             }
-            return process_mtmd_prompt(mctx, json_prompt.at(JSON_STRING_PROMPT_KEY), files);
+            if (json_prompt.contains(JSON_MTMD_VIDEOPAIR_KEY)) {
+                for (const auto & pair_entry : json_prompt.at(JSON_MTMD_VIDEOPAIR_KEY)) {
+                    if (!pair_entry.is_array() || pair_entry.size() != 2) {
+                        throw std::runtime_error("videopair_data entries must be 2-element arrays of base64 strings");
+                    }
+                    auto buf_a = base64_decode(pair_entry.at(0));
+                    auto buf_b = base64_decode(pair_entry.at(1));
+                    mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_video_pair_buf(
+                        mctx, buf_a.data(), buf_a.size(), buf_b.data(), buf_b.size()));
+                    if (!bmp.ptr) {
+                        throw std::runtime_error("Failed to decode video frame pair");
+                    }
+                    // hash over both frames so KV-caching distinguishes pairs from single images
+                    std::string combined; combined.reserve(buf_a.size() + buf_b.size());
+                    combined.insert(combined.end(), buf_a.begin(), buf_a.end());
+                    combined.insert(combined.end(), buf_b.begin(), buf_b.end());
+                    bmp.set_id(fnv_hash(reinterpret_cast<const unsigned char *>(combined.data()), combined.size()).c_str());
+                    bitmaps.entries.push_back(std::move(bmp));
+                }
+            }
+
+            // Tokenize using the prepared bitmaps.
+            std::string prompt = json_prompt.at(JSON_STRING_PROMPT_KEY);
+            mtmd_input_text inp_txt = { prompt.c_str(), /* add_special */ true, /* parse_special */ true };
+            mtmd::input_chunks chunks(mtmd_input_chunks_init());
+            auto bitmaps_c_ptr = bitmaps.c_ptr();
+            int32_t tokenized = mtmd_tokenize(mctx, chunks.ptr.get(), &inp_txt,
+                                              bitmaps_c_ptr.data(), bitmaps_c_ptr.size());
+            if (tokenized != 0) {
+                throw std::runtime_error("Failed to tokenize prompt");
+            }
+            return server_tokens(chunks, true);
         } else {
             // Not multimodal, but contains a subobject.
             llama_tokens tmp = tokenize_mixed(vocab, json_prompt.at(JSON_STRING_PROMPT_KEY), add_special, parse_special);

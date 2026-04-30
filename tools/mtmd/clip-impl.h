@@ -384,6 +384,15 @@ struct clip_image_f32 {
     int nx_real = 0;
 
     std::vector<float> buf;
+
+    // Optional second-frame buffer for video temporal_patch_size=2: when
+    // populated, signals that this `clip_image_f32` represents a frame PAIR
+    // (frame_a in `buf`, frame_b in `buf_b`). The qwen3vl encoder graph
+    // applies patch_embeddings_0 to frame_a and patch_embeddings_1 to
+    // frame_b, then sums — matching torch's 3D conv with kt=2. Empty by
+    // default → image mode (encoder duplicates `buf` into the second conv
+    // input, equivalent to the previous single-image behavior).
+    std::vector<float> buf_b;
 };
 
 //
