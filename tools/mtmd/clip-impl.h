@@ -378,6 +378,11 @@ struct clip_image_f32 {
     int nx;
     int ny;
 
+    // Audio variable-length: number of REAL mel frames before the zero-padded
+    // tail (set by the QWEN2A whisper preprocessor). 0 means "use nx" (no
+    // variable-length truncation, i.e. nx already equals real frame count).
+    int nx_real = 0;
+
     std::vector<float> buf;
 };
 

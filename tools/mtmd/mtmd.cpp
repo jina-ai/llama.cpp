@@ -538,9 +538,13 @@ struct mtmd_context {
             case PROJECTOR_TYPE_QWEN3A:
             case PROJECTOR_TYPE_QWEN25O:
                 {
-                    // <|audio_bos|> ... (embeddings) ... <|audio_eos|>
-                    aud_beg = "<|audio_bos|>";
-                    aud_end = "<|audio_eos|>";
+                    // Upstream Qwen2.5-Omni uses <|audio_bos|>/<|audio_eos|>.
+                    // Jina v5-omni uses <|audio_start|>/<|audio_end|> instead and does not
+                    // have audio_bos/eos in its vocab — they get split into 7 BPE pieces each,
+                    // contaminating the LLM input. Use the v5-omni tokens here for now;
+                    // proper fix is to read these from mmproj metadata.
+                    aud_beg = "<|audio_start|>";
+                    aud_end = "<|audio_end|>";
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_whisper>(ctx_a);
                 } break;
             case PROJECTOR_TYPE_VOXTRAL:
@@ -931,9 +935,10 @@ struct mtmd_tokenizer {
             // TODO: maybe support batching, but this may come with memory cost
             for (auto & mel_spec : mel_spec_chunks) {
                 clip_image_f32_ptr mel_f32(clip_image_f32_init());
-                mel_f32->nx  = mel_spec.n_len;
-                mel_f32->ny  = mel_spec.n_mel;
-                mel_f32->buf = std::move(mel_spec.data);
+                mel_f32->nx       = mel_spec.n_len;
+                mel_f32->ny       = mel_spec.n_mel;
+                mel_f32->nx_real  = mel_spec.n_len_org; // 0 unless variable-length
+                mel_f32->buf      = std::move(mel_spec.data);
                 size_t n_tokens = clip_n_output_tokens(ctx->ctx_a, mel_f32.get());
 
                 clip_image_f32_batch batch_f32;

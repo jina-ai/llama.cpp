@@ -538,6 +538,10 @@ bool mtmd_audio_preprocessor_whisper::preprocess(const float *                 s
         return false;
     }
 
+    // Remember the *real* sample count before any internal zero padding so we
+    // can compute the variable-length mel size for the QWEN2A path.
+    const size_t real_n_samples = n_samples;
+
     std::vector<float> smpl;
     // if input is too short, pad with zeros
     // this is to avoid potential issues with stage1/2 padding in log_mel_spectrogram
@@ -574,11 +578,44 @@ bool mtmd_audio_preprocessor_whisper::preprocess(const float *                 s
         return false;
     }
 
-    // because the cgraph in clip.cpp only accepts 3000 frames each, we need to split the mel
-    // we always expect the mel to have 3000 silent frames at the end
     if (DEBUG) {
         printf("output: n_mel = %d, n_len = %d\n", out_full.n_mel, out_full.n_len);
     }
+
+    // For Qwen2.5-Omni audio (QWEN2A / QWEN25O resolves to QWEN2A): emit ONE
+    // variable-length chunk sized to a multiple of 200 mel frames, with the
+    // tail past the real audio's mel frames set to literal zero. This matches
+    // torch's chunked behavior (where padded chunks have padding_value=0) and
+    // preserves the n_len_org as the real mel-frame count for downstream
+    // plumbing (encoder uses it for masking + truncation).
+    if (this->proj_type == PROJECTOR_TYPE_QWEN2A) {
+        constexpr int kChunkPre = 200;
+        const int real_mel_frames = static_cast<int>(
+            (real_n_samples + hparams.audio_hop_len - 1) / hparams.audio_hop_len
+        );
+        const int padded_n_len =
+            ((real_mel_frames + kChunkPre - 1) / kChunkPre) * kChunkPre;
+
+        mtmd_audio_mel out_chunk;
+        out_chunk.n_len     = padded_n_len;
+        out_chunk.n_mel     = out_full.n_mel;
+        out_chunk.n_len_org = real_mel_frames;
+        out_chunk.data.assign(static_cast<size_t>(out_chunk.n_mel) * out_chunk.n_len, 0.0f);
+
+        const int copy_len = std::min(real_mel_frames, out_full.n_len);
+        for (int m = 0; m < out_full.n_mel; ++m) {
+            std::copy(
+                out_full.data.begin() + m * out_full.n_len,
+                out_full.data.begin() + m * out_full.n_len + copy_len,
+                out_chunk.data.begin() + m * padded_n_len
+            );
+            // tail [copy_len..padded_n_len) stays zero from the assign above
+        }
+        output.push_back(std::move(out_chunk));
+        return true;
+    }
+
+    // Default Whisper-style fixed 3000-frame chunking (other audio models).
     const size_t frames_per_chunk = 3000;
     GGML_ASSERT((size_t) out_full.n_len > frames_per_chunk);
     for (size_t off = 0; off < (size_t) out_full.n_len; off += frames_per_chunk) {
@@ -590,7 +627,7 @@ bool mtmd_audio_preprocessor_whisper::preprocess(const float *                 s
         mtmd_audio_mel out_chunk;
         out_chunk.n_len     = n_len;
         out_chunk.n_mel     = out_full.n_mel;
-        out_chunk.n_len_org = out_full.n_mel;  // unused
+        out_chunk.n_len_org = 0;  // unused for fixed-chunk path
         out_chunk.data.reserve(out_chunk.n_mel * out_chunk.n_len);
 
         for (int i = 0; i < out_full.n_mel; i++) {

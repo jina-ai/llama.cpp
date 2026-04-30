@@ -300,7 +300,8 @@ ggml_tensor * clip_graph::build_vit(
             norm_type norm_t,
             ffn_op_type ffn_t,
             ggml_tensor * learned_pos_embd,
-            std::function<ggml_tensor *(ggml_tensor *, const clip_layer &)> add_pos
+            std::function<ggml_tensor *(ggml_tensor *, const clip_layer &)> add_pos,
+            ggml_tensor * kq_mask
         ) {
     if (learned_pos_embd) {
         inp = ggml_add(ctx0, inp, learned_pos_embd);
@@ -427,7 +428,7 @@ ggml_tensor * clip_graph::build_vit(
             }
 
             cur = build_attn(layer.o_w, layer.o_b,
-                Qcur, Kcur, Vcur, nullptr, kq_scale, il);
+                Qcur, Kcur, Vcur, kq_mask, kq_scale, il);
             cb(cur, "attn_out", il);
         }
 
@@ -3062,6 +3063,17 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
         case PROJECTOR_TYPE_MERALION:
         case PROJECTOR_TYPE_MUSIC_FLAMINGO:
             {
+                // For QWEN2A variable-length: report tokens based on the real
+                // mel-frame count (nx_real), not the padded mel chunk size.
+                // _get_feat_extract_output_lengths formula:
+                //   aftercnn  = (n - 1) / 2 + 1
+                //   afterpool = (aftercnn - 2) / 2 + 1
+                // which simplifies to (n + 1) / 4 (integer) for n >= 2.
+                if (ctx->model.proj_type == PROJECTOR_TYPE_QWEN2A && img->nx_real > 0) {
+                    n_patches = (img->nx_real + 1) / 4;
+                    break;
+                }
+
                 n_patches = img->nx;
 
                 const int proj_stack_factor = ctx->model.hparams.proj_stack_factor;
@@ -3275,6 +3287,61 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         std::vector<float> inp_raw(n_step * n_mel);
         std::memcpy(inp_raw.data(), mel_inp->buf.data(), n_step * n_mel * sizeof(float));
         set_input_f32("inp_raw", inp_raw);
+
+        // Qwen2.5-Omni audio uses block-diagonal self-attention. Fill the
+        // chunk mask graph input (allocated in clip_graph_whisper_enc::build) so
+        // tokens only attend within their n_window-sized chunk. Whisper-style
+        // n_pos = n_step / 2 (after conv1d stride 2 downsample).
+        //
+        // For variable-length input (mel_inp->nx_real > 0): also zero
+        // attention to invalid positions in the last partial chunk
+        // post-conv (those tokens come from the zeroed mel tail), and
+        // multiply the last partial chunk's conv1 output by a positional
+        // mask so the conv1 output at invalid mel positions becomes 0
+        // (matches torch's `padded_embed * padded_mask`).
+        if (ctx->model.proj_type == PROJECTOR_TYPE_QWEN2A) {
+            const int n_pos = n_step / 2;
+            // Standard Qwen2.5-Omni n_window: 100 mel frames after conv2.
+            constexpr int chunk_size = 100;
+            // Real post-conv length (matches torch's _get_feat_extract_output_lengths).
+            const int real_post_conv = (mel_inp->nx_real > 0)
+                ? (mel_inp->nx_real - 1) / 2 + 1
+                : n_pos;
+
+            std::vector<float> chunk_mask(static_cast<size_t>(n_pos) * n_pos);
+            for (int i = 0; i < n_pos; ++i) {
+                const int ci = i / chunk_size;
+                const bool i_valid = (i < real_post_conv);
+                for (int j = 0; j < n_pos; ++j) {
+                    const int cj = j / chunk_size;
+                    const bool j_valid = (j < real_post_conv);
+                    bool allow;
+                    if (i_valid) {
+                        allow = (ci == cj) && j_valid;
+                    } else {
+                        // invalid query: only attend to itself (avoid 0/0 softmax)
+                        allow = (i == j);
+                    }
+                    chunk_mask[static_cast<size_t>(i) * n_pos + j] =
+                        allow ? 0.0f : -INFINITY;
+                }
+            }
+            set_input_f32("audio_chunk_mask", chunk_mask);
+
+            // Variable-length partial-chunk conv1 output mask.
+            constexpr int kQwen2aWindowPre = 200;
+            if (mel_inp->nx_real > 0) {
+                const int n_chunks = n_step / kQwen2aWindowPre;
+                const int real_in_last_chunk = mel_inp->nx_real - (n_chunks - 1) * kQwen2aWindowPre;
+                if (real_in_last_chunk > 0 && real_in_last_chunk < kQwen2aWindowPre) {
+                    std::vector<float> partial_mask(kQwen2aWindowPre, 0.0f);
+                    for (int i = 0; i < real_in_last_chunk; ++i) {
+                        partial_mask[i] = 1.0f;
+                    }
+                    set_input_f32("audio_partial_chunk_mask", partial_mask);
+                }
+            }
+        }
     }
 
     // set input per projector

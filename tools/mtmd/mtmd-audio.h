@@ -52,8 +52,11 @@ struct mtmd_audio_cache {
 
 struct mtmd_audio_preprocessor {
     const clip_hparams & hparams;
+    const projector_type proj_type;
 
-    mtmd_audio_preprocessor(const clip_ctx * ctx): hparams(*clip_get_hparams(ctx)) {}
+    mtmd_audio_preprocessor(const clip_ctx * ctx)
+        : hparams(*clip_get_hparams(ctx))
+        , proj_type(clip_get_projector_type(ctx)) {}
 
     virtual ~mtmd_audio_preprocessor() = default;
     virtual void initialize() = 0; // NOT thread-safe

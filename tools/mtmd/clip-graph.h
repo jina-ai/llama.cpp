@@ -57,13 +57,18 @@ struct clip_graph {
     // build vision transformer (ViT) cgraph
     // this function should cover most of the models
     // if your model has specific features, you should probably duplicate this function
+    //
+    // kq_mask is an optional [n_pos, n_pos] f32 tensor passed to the attention's
+    // softmax. Used by the audio path to apply block-diagonal (chunked) attention
+    // masking; nullptr disables masking (full attention).
     ggml_tensor * build_vit(
                 ggml_tensor * inp,
                 int64_t n_pos,
                 norm_type norm_t,
                 ffn_op_type ffn_t,
                 ggml_tensor * learned_pos_embd,
-                std::function<ggml_tensor *(ggml_tensor *, const clip_layer &)> add_pos);
+                std::function<ggml_tensor *(ggml_tensor *, const clip_layer &)> add_pos,
+                ggml_tensor * kq_mask = nullptr);
 
     // build the input after conv2d (inp_raw --> patches)
     // returns tensor with shape [n_embd, n_patches]
