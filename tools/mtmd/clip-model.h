@@ -32,6 +32,7 @@ enum resize_algo {
     RESIZE_ALGO_BILINEAR, // stretch to target resolution
     RESIZE_ALGO_BICUBIC, // center-crop when aspect ratio doesn't match
     RESIZE_ALGO_BICUBIC_PILLOW,
+    RESIZE_ALGO_BILINEAR_PILLOW, // PIL-equivalent bilinear (centered half-pixel sampling, antialias on downscale)
     // RESIZE_ALGO_LANCZOS, // TODO
 };
 
