@@ -585,10 +585,16 @@ bool mtmd_audio_preprocessor_whisper::preprocess(const float *                 s
     // For Qwen2.5-Omni audio (QWEN2A / QWEN25O resolves to QWEN2A): emit ONE
     // variable-length chunk sized to a multiple of 200 mel frames, with the
     // tail past the real audio's mel frames set to literal zero. This matches
-    // torch's chunked behavior (where padded chunks have padding_value=0) and
-    // preserves the n_len_org as the real mel-frame count for downstream
-    // plumbing (encoder uses it for masking + truncation).
-    if (this->proj_type == PROJECTOR_TYPE_QWEN2A) {
+    // torch's lower-level masked path (model.get_audio_features(features,
+    // feature_attention_mask=mask_real)) but DEVIATES from the canonical
+    // HF README path which always emits feat.shape[-1] // 4 = 750 audio
+    // tokens for any audio < 30s. Default to the HF README path; opt in to
+    // variable-length via `MTMD_QWEN2A_VARLEN=1` for use cases that pass
+    // feature_attention_mask through to the model (vLLM does this since
+    // commit 05df85e).
+    const char * varlen_env = std::getenv("MTMD_QWEN2A_VARLEN");
+    const bool enable_varlen = (varlen_env != nullptr && varlen_env[0] != '\0' && varlen_env[0] != '0');
+    if (enable_varlen && this->proj_type == PROJECTOR_TYPE_QWEN2A) {
         constexpr int kChunkPre = 200;
         const int real_mel_frames = static_cast<int>(
             (real_n_samples + hparams.audio_hop_len - 1) / hparams.audio_hop_len
