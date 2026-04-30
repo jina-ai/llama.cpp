@@ -4344,6 +4344,24 @@ class Qwen25OmniModel(Qwen2VLVisionModel, Qwen25AudioModel):
         return  # skip other tensors
 
 
+@ModelBase.register("Qwen25OmniAudioModel")
+class Qwen25OmniAudioModelStandalone(Qwen25AudioModel):
+    """Audio-only variant of Qwen2.5-Omni. For models that bundle just the audio
+    encoder + projector (e.g. jina-embeddings-v5-omni audio-only mmproj)."""
+
+    has_audio_encoder = True
+    has_vision_encoder = False
+
+    def get_audio_config(self) -> dict[str, Any] | None:
+        # v5-omni uses a flat config.json with audio_config at top level,
+        # unlike upstream Qwen2.5-Omni which nests it under thinker_config.
+        return self.global_config.get("audio_config")
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.QWEN25O)
+
+
 @ModelBase.register("InternVisionModel")
 class InternVisionModel(MmprojModel):
 
