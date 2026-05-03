@@ -51,6 +51,12 @@ struct clip_hparams {
     int32_t image_longest_edge = 0;
     int32_t image_min_pixels = -1;
     int32_t image_max_pixels = -1;
+    // For video frames (qwen3vl temporal-pair path). When set, video frames
+    // bypass image_*_pixels and use these limits instead (matches torch's
+    // separate Qwen3VLVideoProcessor.size in video_preprocessor_config.json).
+    // 0 means "fall back to image_*_pixels" (image-only mmprojs leave these 0).
+    int32_t video_min_pixels = 0;
+    int32_t video_max_pixels = 0;
     resize_algo image_resize_algo = RESIZE_ALGO_BICUBIC;
     bool image_resize_pad = true; // if false, center-crop will be applied when resizing
     std::array<uint8_t, 3> image_pad_color = {0, 0, 0};

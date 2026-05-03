@@ -2190,6 +2190,16 @@ class MmprojModel(ModelBase):
                 # merge configs
                 self.preprocessor_config = {**self.preprocessor_config, **cfg}
 
+        # optional: video_preprocessor_config.json (separate min/max for video frames,
+        # used by Qwen3VLVideoProcessor and similar). Stored separately so the qwen3vl
+        # converter path can write video_min/max_pixels metadata distinct from the
+        # image preprocessor's limits.
+        self.video_preprocessor_config: dict[str, Any] = {}
+        video_preprocessor_config_path = self.dir_model / "video_preprocessor_config.json"
+        if video_preprocessor_config_path.is_file():
+            with open(video_preprocessor_config_path, "r", encoding="utf-8") as f:
+                self.video_preprocessor_config = json.load(f)
+
     def get_vision_config(self) -> dict[str, Any] | None:
         config_name = "vision_config" if not self.is_mistral_format else "vision_encoder"
         return self.global_config.get(config_name)
@@ -4234,6 +4244,19 @@ class Qwen2VLVisionModel(MmprojModel):
             if min_pixels is not None and max_pixels is not None:
                 self.gguf_writer.add_vision_min_pixels(int(min_pixels))
                 self.gguf_writer.add_vision_max_pixels(int(max_pixels))
+
+        # Carry video_min_pixels / video_max_pixels from video_preprocessor_config.json
+        # (Qwen3VLVideoProcessor). Avoids upscaling small video frames to image_min_pixels
+        # on the temporal-pair encode path.
+        vp = self.video_preprocessor_config
+        if vp:
+            v_size = vp.get("size") or {}
+            v_min = v_size.get("shortest_edge") or vp.get("min_pixels")
+            v_max = v_size.get("longest_edge") or vp.get("max_pixels")
+            if v_min is not None and v_max is not None:
+                self.gguf_writer.add_vision_video_min_pixels(int(v_min))
+                self.gguf_writer.add_vision_video_max_pixels(int(v_max))
+
         # default values below are taken from HF tranformers code
         self.gguf_writer.add_vision_attention_layernorm_eps(self.global_config.get("rms_norm_eps", 1e-6))
 
@@ -4909,6 +4932,19 @@ class Qwen3VLVisionModel(MmprojModel):
             if min_pixels is not None and max_pixels is not None:
                 self.gguf_writer.add_vision_min_pixels(int(min_pixels))
                 self.gguf_writer.add_vision_max_pixels(int(max_pixels))
+
+        # Carry video_min_pixels / video_max_pixels from video_preprocessor_config.json
+        # (Qwen3VLVideoProcessor) so video-frame preprocessing matches torch's separate
+        # video pixel limits instead of upscaling small frames to image_min_pixels.
+        # Stored as size.shortest_edge / size.longest_edge in qwen3vl video configs.
+        vp = self.video_preprocessor_config
+        if vp:
+            v_size = vp.get("size") or {}
+            v_min = v_size.get("shortest_edge") or vp.get("min_pixels")
+            v_max = v_size.get("longest_edge") or vp.get("max_pixels")
+            if v_min is not None and v_max is not None:
+                self.gguf_writer.add_vision_video_min_pixels(int(v_min))
+                self.gguf_writer.add_vision_video_max_pixels(int(v_max))
 
         # Use text config's rms_norm_eps for vision attention layernorm eps
         rms_norm_eps = self.global_config.get("text_config", {}).get("rms_norm_eps", 1e-6)

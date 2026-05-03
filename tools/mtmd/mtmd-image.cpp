@@ -1042,7 +1042,9 @@ bool mtmd_image_preprocessor_fixed_size::preprocess(const clip_image_u8 & img, c
 //
 
 bool mtmd_image_preprocessor_dyn_size::preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) {
-    GGML_ASSERT(hparams.image_min_pixels > 0 && hparams.image_max_pixels > 0);
+    const int min_px = effective_min_pixels();
+    const int max_px = effective_max_pixels();
+    GGML_ASSERT(min_px > 0 && max_px > 0);
     clip_image_u8 resized_image;
     const clip_image_size original_size{img.nx, img.ny};
     // the original pixtral model doesn't have n_merge
@@ -1050,8 +1052,8 @@ bool mtmd_image_preprocessor_dyn_size::preprocess(const clip_image_u8 & img, cli
     const clip_image_size target_size = img_tool::calc_size_preserved_ratio(
         original_size,
         hparams.patch_size * cur_merge,
-        hparams.image_min_pixels,
-        hparams.image_max_pixels);
+        min_px,
+        max_px);
     img_tool::resize(img, resized_image, target_size,
                         hparams.image_resize_algo,
                         hparams.image_resize_pad,

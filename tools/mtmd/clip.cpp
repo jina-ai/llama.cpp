@@ -1389,6 +1389,11 @@ struct clip_model_loader {
                             LOG_WRN("%s: if you encounter problems with accuracy, try adding --image-min-tokens 1024\n", __func__);
                             LOG_WRN("%s: more info: https://github.com/ggml-org/llama.cpp/issues/16842\n\n", __func__);
                         }
+                        // Optional: separate video_min/max_pixels for the temporal-pair
+                        // video path (qwen3vl). Falls back to image_*_pixels at runtime if
+                        // unset. Sourced from video_preprocessor_config.json by the converter.
+                        get_u32(KEY_VIDEO_MIN_PIXELS, hparams.video_min_pixels, false);
+                        get_u32(KEY_VIDEO_MAX_PIXELS, hparams.video_max_pixels, false);
                     } break;
                 case PROJECTOR_TYPE_STEP3VL:
                     {
@@ -1579,6 +1584,12 @@ struct clip_model_loader {
                 }
                 if (hparams.image_max_pixels > 0) {
                     LOG_INF("%s: image_max_pixels:   %d%s\n", __func__, hparams.image_max_pixels, hparams.custom_image_max_tokens > 0 ? " (custom value)" : "");
+                }
+                if (hparams.video_min_pixels > 0) {
+                    LOG_INF("%s: video_min_pixels:   %d\n", __func__, hparams.video_min_pixels);
+                }
+                if (hparams.video_max_pixels > 0) {
+                    LOG_INF("%s: video_max_pixels:   %d\n", __func__, hparams.video_max_pixels);
                 }
             } else if (is_audio) {
                 LOG_INF("\n--- audio hparams ---\n");

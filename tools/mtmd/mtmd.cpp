@@ -788,11 +788,26 @@ struct mtmd_tokenizer {
             img_u8->buf.resize(bitmap->data.size());
             std::memcpy(img_u8->buf.data(), bitmap->data.data(), img_u8->nx * img_u8->ny * 3);
 
+            // For video frame pairs (qwen3vl temporal_patch_size=2): swap the
+            // preprocessor's pixel limits to the video-specific ones (from
+            // video_preprocessor_config.json) so we don't upscale small frames
+            // to image_min_pixels. RAII-ish: restore at end of this block.
+            const bool is_video_pair = !bitmap->data_b.empty();
+            if (is_video_pair) {
+                const auto * hp = clip_get_hparams(ctx->ctx_v);
+                if (hp != nullptr && hp->video_min_pixels > 0 && hp->video_max_pixels > 0) {
+                    ctx->image_preproc->pixel_min_override = hp->video_min_pixels;
+                    ctx->image_preproc->pixel_max_override = hp->video_max_pixels;
+                }
+            }
+
             // preprocess image
             clip_image_f32_batch batch_f32;
             bool ok = ctx->image_preproc->preprocess(*img_u8, batch_f32);
             if (!ok) {
                 LOG_ERR("Unable to preprocess image\n");
+                ctx->image_preproc->pixel_min_override = 0;
+                ctx->image_preproc->pixel_max_override = 0;
                 return 2;
             }
 
@@ -803,7 +818,7 @@ struct mtmd_tokenizer {
             // patch_embeddings_0 to frame_a and patch_embeddings_1 to frame_b
             // and sums (matches torch's 3D conv with kt=2). Both frames are
             // preprocessed identically since they share (nx, ny).
-            if (!bitmap->data_b.empty()) {
+            if (is_video_pair) {
                 GGML_ASSERT(bitmap->data_b.size() == bitmap->data.size());
                 clip_image_u8_ptr img_u8_b(clip_image_u8_init());
                 img_u8_b->nx = bitmap->nx;
@@ -814,17 +829,24 @@ struct mtmd_tokenizer {
                 clip_image_f32_batch batch_f32_b;
                 if (!ctx->image_preproc->preprocess(*img_u8_b, batch_f32_b)) {
                     LOG_ERR("Unable to preprocess video frame_b\n");
+                    ctx->image_preproc->pixel_min_override = 0;
+                    ctx->image_preproc->pixel_max_override = 0;
                     return 2;
                 }
                 if (batch_f32.entries.size() != batch_f32_b.entries.size()) {
                     LOG_ERR("Frame_a and frame_b produced different batch sizes (%zu vs %zu)\n",
                             batch_f32.entries.size(), batch_f32_b.entries.size());
+                    ctx->image_preproc->pixel_min_override = 0;
+                    ctx->image_preproc->pixel_max_override = 0;
                     return 2;
                 }
                 for (size_t e = 0; e < batch_f32.entries.size(); ++e) {
                     batch_f32.entries[e]->buf_b = std::move(batch_f32_b.entries[e]->buf);
                 }
             }
+            // Always restore the override (no-op when it was 0).
+            ctx->image_preproc->pixel_min_override = 0;
+            ctx->image_preproc->pixel_max_override = 0;
 
             // handle llava-uhd style preprocessing
             const bool has_tiling_grid = batch_f32.grid_x > 0 && batch_f32.grid_y > 0;

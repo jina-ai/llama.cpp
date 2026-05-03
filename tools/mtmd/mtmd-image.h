@@ -12,10 +12,21 @@
 struct mtmd_image_preprocessor {
     const clip_hparams & hparams;
 
+    // Optional per-call pixel-limit overrides used by the video-pair encode
+    // path (qwen3vl): when set to >0, dyn_size::preprocess uses these instead
+    // of hparams.image_*_pixels so video frames don't get upscaled to
+    // image_min_pixels (which is sized for static images, not video frames).
+    // 0 means "use hparams.image_*_pixels".
+    int pixel_min_override = 0;
+    int pixel_max_override = 0;
+
     mtmd_image_preprocessor(const clip_ctx * ctx): hparams(*clip_get_hparams(ctx)) {}
 
     virtual ~mtmd_image_preprocessor() = default;
     virtual bool preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) = 0;
+
+    int effective_min_pixels() const { return pixel_min_override > 0 ? pixel_min_override : hparams.image_min_pixels; }
+    int effective_max_pixels() const { return pixel_max_override > 0 ? pixel_max_override : hparams.image_max_pixels; }
 
     void img_u8_to_f32(const clip_image_u8 & src, clip_image_f32 & dst, const float mean[3], const float std[3]);
     void img_u8_to_f32(const clip_image_u8 & src, clip_image_f32 & dst);

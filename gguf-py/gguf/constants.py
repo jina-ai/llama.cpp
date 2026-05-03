@@ -302,6 +302,8 @@ class Keys:
         IMAGE_SIZE          = "clip.vision.image_size"
         IMAGE_MIN_PIXELS    = "clip.vision.image_min_pixels"
         IMAGE_MAX_PIXELS    = "clip.vision.image_max_pixels"
+        VIDEO_MIN_PIXELS    = "clip.vision.video_min_pixels"
+        VIDEO_MAX_PIXELS    = "clip.vision.video_max_pixels"
         PREPROC_MIN_TILES   = "clip.vision.preproc_min_tiles"
         PREPROC_MAX_TILES   = "clip.vision.preproc_max_tiles"
         PREPROC_IMAGE_SIZE  = "clip.vision.preproc_image_size"

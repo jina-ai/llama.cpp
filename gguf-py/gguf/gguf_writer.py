@@ -1160,6 +1160,12 @@ class GGUFWriter:
     def add_vision_min_pixels(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.IMAGE_MIN_PIXELS, value)
 
+    def add_vision_video_max_pixels(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.VIDEO_MAX_PIXELS, value)
+
+    def add_vision_video_min_pixels(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.VIDEO_MIN_PIXELS, value)
+
     def add_vision_preproc_max_tiles(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.PREPROC_MAX_TILES, value)
 
