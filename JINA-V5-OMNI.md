@@ -25,20 +25,29 @@ F16 mmprojs). Numerical-parity bar is **cos ≥ 0.99**.
 | Image `img_car` (640×480) | **0.9989** | **0.9994** |
 | Image `img_cat` (32×32, requires 16× upscale) | **0.9990** | **0.9986** |
 | Image–query Spearman | 1.0 | 1.0 |
-| Audio (JFK speech, 11s @ 16kHz mono) | **0.9997** | **0.9999** |
+| Audio (JFK speech, 11s @ 16kHz mono) | **0.9996** | **0.9998** |
 | Audio–query Spearman | 1.0 | 1.0 |
 | PDF (2-page fused image embedding) | **0.9943** | 0.9877 |
-| Video (4-frame, 2 logical frames @ 512×512, T=2) | **0.9978** | n/a (nano `LlavaEuroBertAudioConfig` has no `video_token_id`) |
-| Video (2-frame, 1 logical frame @ 512×512, T=1) | **0.9981** | n/a |
+| Video native (4-frame, 2 logical frames @ 512×512, T=2) | **0.9978** | **0.9993** |
+| Video native (4-frame, 2 logical frames @ 224×224, T=2) | **0.9968** | **0.9998** |
 | Cross-backend query cos | ≥ 0.99994 | ≥ 0.99996 |
 
-Reports: `outputs/gguf-omni-{small,nano}-retrieval/{vision,audio,pdf,video}_parity_report_*_2026-04-30.json`
+Reports: `outputs/gguf-omni-{small,nano}-retrieval/{vision,audio,pdf,video}_parity_report_canonical_2026-05-03.json`
 in the [multimodal-large-scale-training](https://github.com/jina-ai/multimodal-large-scale-training)
 repo.
+
+Both small and nano support **native temporal-pair video** (qwen3vl 3D-conv
+with `kt=2`) — see "Multimodal (text + video)" below. nano routes video frames
+through its existing image path via a key-rename trick (`pixel_values_videos →
+pixel_values`, `video_grid_thw → image_grid_thw`); the Qwen3VLVisionModel's
+Conv3d patch embed handles the temporal dimension natively when
+`image_grid_thw=[T,H,W]` with `T=2`.
 
 ## Patches in this branch
 
 ```
+f23e08e mtmd: separate video_min/max_pixels for qwen3vl video frames
+1b91bac audio: read clip.audio.n_window from gguf metadata
 e192d1b mtmd: native Qwen3VL video parity via temporal-pair patch_embed
 ff59ead mtmd: gate Qwen2.5-Omni variable-length audio behind MTMD_QWEN2A_VARLEN env var
 25b6c8b mtmd: full Qwen2.5-Omni audio parity vs torch (chunked attn + per-chunk conv + variable-length)
@@ -195,12 +204,20 @@ the multimodal-large-scale-training repo for a reference harness):
 ```
 
 Both frames in each pair must decode to the same dimensions; the same
-image preprocessor runs on each frame, then the encoder graph
-sums the two convs. The fixed-size `image_min_pixels` constraint from
-the vision mmproj's metadata still applies, so frame dimensions should
-be ≥ the encoder's minimum (default 512² for v5-omni's vision mmproj)
-to avoid resize divergence vs torch's video processor (which uses its
-own native sizing).
+image preprocessor runs on each frame, then the encoder graph sums
+the two convs.
+
+**Video pixel limits.** Mmprojs converted from a repo that ships
+`video_preprocessor_config.json` (Qwen3VLVideoProcessor, e.g. v5-omni
+small) carry separate `clip.vision.video_min_pixels` /
+`clip.vision.video_max_pixels` metadata derived from the video
+processor's `size.shortest_edge / longest_edge`. The runtime swaps
+these in only on the video-pair encode path so sub-`image_min_pixels`
+frames don't get force-upscaled. Mmprojs without these keys fall
+back to `image_min/max_pixels` (which forces a 512² minimum for
+v5-omni and divergence against torch's video processor on small frames).
+Patch existing mmprojs with
+`scripts/omni/gguf/diag_patch_mmproj_pixels.py --video-preprocessor-config`.
 
 Multimodal_data and videopair_data can also be mixed in a single
 request — each marker consumes one entry from `multimodal_data` (single
@@ -254,10 +271,18 @@ input formats are WAV, MP3, and FLAC (via `miniaudio`).
 - The vision mmprojs released alongside v5-omni include `image_min_pixels` /
   `image_max_pixels` metadata; older vision mmprojs converted before commit
   `5df11fb` need patching with `scripts/omni/gguf/diag_patch_mmproj_pixels.py`
-  from the multimodal-large-scale-training repo.
-- The audio mmproj's `n_window` is hardcoded to 100 in C++ for now (matching
-  `Qwen2_5OmniAudioEncoderConfig.n_window`). If a future model uses a different
-  window size it would need to be wired through gguf metadata; the converter
-  already writes `audio_config` keys, just not `n_window` yet.
+  from the multimodal-large-scale-training repo. The same patcher accepts
+  `--video-preprocessor-config` to add `video_min/max_pixels` to existing
+  mmprojs.
+- The audio mmproj's `n_window` is now read from gguf metadata
+  (`clip.audio.n_window`) — written by the converter from
+  `audio_config.n_window`; the runtime falls back to 100 (Qwen2.5-Omni
+  default) for older mmprojs that lack the key.
+- nano `LlavaEuroBertAudioConfig` has no `video_token_id`; the canonical
+  nano video flow renames `pixel_values_videos → pixel_values` and
+  `video_grid_thw → image_grid_thw` on the python side (see nano's
+  `custom_st.py`), then the existing image forward branch handles the
+  T=2 grouping via Qwen3VLVisionModel's Conv3d patch_embed. GGUF uses
+  the same `videopair_data` API as small.
 - See [`AGENTS.md`](AGENTS.md) for the upstream contribution policy. Private
   forks (this one) are exempt.
