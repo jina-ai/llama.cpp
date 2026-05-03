@@ -12,10 +12,14 @@ ggml_cgraph * clip_graph_whisper_enc::build() {
     // Qwen2_5OmniAudioEncoder. Other audio models keep the original
     // single-sequence path.
     if (proj_type == PROJECTOR_TYPE_QWEN2A) {
-        constexpr int kQwen2aWindowPre = 200; // n_window * 2 mel frames per chunk
+        // n_window is in mel frames after conv2 (stride-2). Chunks before conv2
+        // are n_window*2 mel frames. Read from gguf metadata; default to 100
+        // for older mmprojs that lack the key (matches Qwen2.5-Omni).
+        const int kQwen2aWindowPost = hparams.audio_n_window > 0 ? hparams.audio_n_window : 100;
+        const int kQwen2aWindowPre  = kQwen2aWindowPost * 2;
         const int n_chunks = n_frames / kQwen2aWindowPre;
         GGML_ASSERT(n_chunks * kQwen2aWindowPre == n_frames &&
-                    "n_frames must be a multiple of 200 for chunked Qwen2A audio");
+                    "n_frames must be a multiple of n_window*2 for chunked Qwen2A audio");
 
         // For variable-length: if the last chunk has only `real_in_last_chunk`
         // real mel frames (out of kQwen2aWindowPre), torch's `padded_mask`
@@ -40,7 +44,7 @@ ggml_cgraph * clip_graph_whisper_enc::build() {
         // outputs along the length dimension.
         ggml_tensor * concat_out = nullptr;
         for (int c = 0; c < n_chunks; ++c) {
-            // View of inp[c*200 : (c+1)*200, :, :] — shape (200, n_mel, 1).
+            // View of inp[c*kQwen2aWindowPre : (c+1)*kQwen2aWindowPre, :, :].
             ggml_tensor * chunk_view = ggml_view_3d(
                 ctx0, inp,
                 kQwen2aWindowPre, inp->ne[1], inp->ne[2],
@@ -109,11 +113,11 @@ ggml_cgraph * clip_graph_whisper_enc::build() {
     // chunk independently — not as a contiguous [0..n_pos-1] across the full
     // sequence. So we tile the first n_window positions across all chunks for
     // QWEN2A.
-    constexpr int kQwen2aWindowPost = 100; // n_window after conv2 stride 2
 
     ggml_tensor * kq_mask = nullptr;
     ggml_tensor * pos_embd_selected;
     if (proj_type == PROJECTOR_TYPE_QWEN2A) {
+        const int kQwen2aWindowPost = hparams.audio_n_window > 0 ? hparams.audio_n_window : 100;
         GGML_ASSERT(n_pos % kQwen2aWindowPost == 0 &&
                     "n_pos must be a multiple of n_window for chunked attention");
 

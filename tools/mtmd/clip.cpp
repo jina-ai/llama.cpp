@@ -1116,6 +1116,7 @@ struct clip_model_loader {
                 }
             } else if (is_audio) {
                 get_u32(KEY_A_NUM_MEL_BINS, hparams.n_mel_bins);
+                get_u32(KEY_A_N_WINDOW, hparams.audio_n_window, false);
                 // some hparams are unused, but still need to set to avoid issues
                 hparams.image_size = 0;
                 hparams.patch_size = 1;
@@ -1588,6 +1589,9 @@ struct clip_model_loader {
                 LOG_INF("%s: audio_n_fft:        %d\n", __func__, hparams.audio_n_fft);
                 LOG_INF("%s: audio_window_len:   %d\n", __func__, hparams.audio_window_len);
                 LOG_INF("%s: audio_hop_len:      %d\n", __func__, hparams.audio_hop_len);
+                LOG_INF("%s: audio_n_window:     %d%s\n", __func__,
+                        hparams.audio_n_window,
+                        hparams.audio_n_window == 0 ? " (defaulting to 100 for QWEN2A)" : "");
             }
             LOG_INF("\n");
             LOG_INF("%s: model size:         %.2f MiB\n", __func__, model_size / 1024.0 / 1024.0);
@@ -3330,8 +3334,13 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         // (matches torch's `padded_embed * padded_mask`).
         if (ctx->model.proj_type == PROJECTOR_TYPE_QWEN2A) {
             const int n_pos = n_step / 2;
-            // Standard Qwen2.5-Omni n_window: 100 mel frames after conv2.
-            constexpr int chunk_size = 100;
+            // n_window is in mel frames after conv2 (stride-2 downsample applied
+            // by both conv1 and conv2). Standard Qwen2.5-Omni: 100. Read from
+            // gguf metadata; fall back to 100 for older mmprojs that lack the key.
+            const int chunk_size = ctx->model.hparams.audio_n_window > 0
+                ? ctx->model.hparams.audio_n_window
+                : 100;
+            const int chunk_pre = chunk_size * 2; // mel frames per chunk before conv2 (matches torch n_window*2)
             // Real post-conv length (matches torch's _get_feat_extract_output_lengths).
             const int real_post_conv = (mel_inp->nx_real > 0)
                 ? (mel_inp->nx_real - 1) / 2 + 1
@@ -3358,12 +3367,11 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
             set_input_f32("audio_chunk_mask", chunk_mask);
 
             // Variable-length partial-chunk conv1 output mask.
-            constexpr int kQwen2aWindowPre = 200;
             if (mel_inp->nx_real > 0) {
-                const int n_chunks = n_step / kQwen2aWindowPre;
-                const int real_in_last_chunk = mel_inp->nx_real - (n_chunks - 1) * kQwen2aWindowPre;
-                if (real_in_last_chunk > 0 && real_in_last_chunk < kQwen2aWindowPre) {
-                    std::vector<float> partial_mask(kQwen2aWindowPre, 0.0f);
+                const int n_chunks = n_step / chunk_pre;
+                const int real_in_last_chunk = mel_inp->nx_real - (n_chunks - 1) * chunk_pre;
+                if (real_in_last_chunk > 0 && real_in_last_chunk < chunk_pre) {
+                    std::vector<float> partial_mask(chunk_pre, 0.0f);
                     for (int i = 0; i < real_in_last_chunk; ++i) {
                         partial_mask[i] = 1.0f;
                     }

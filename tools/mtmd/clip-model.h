@@ -93,6 +93,7 @@ struct clip_hparams {
     // audio
     int32_t n_mel_bins = 0; // whisper preprocessor
     int32_t proj_stack_factor = 0; // ultravox
+    int32_t audio_n_window = 0; // qwen2.5-omni / qwen3a chunked-attention window (mel frames after conv2)
 
     // audio-to-mel preprocessor params
     int32_t audio_chunk_len   = -1; // in seconds

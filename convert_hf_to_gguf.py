@@ -4285,6 +4285,9 @@ class Qwen25AudioModel(MmprojModel):
         assert self.hparams_audio is not None
         self.gguf_writer.add_audio_num_mel_bins(self.hparams_audio["num_mel_bins"])
         self.gguf_writer.add_audio_attention_layernorm_eps(self.hparams_audio.get("layer_norm_eps", 1e-5))
+        n_window = self.hparams_audio.get("n_window")
+        if n_window is not None:
+            self.gguf_writer.add_audio_n_window(int(n_window))
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         # SinusoidsPositionEmbedding

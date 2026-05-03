@@ -339,6 +339,7 @@ class Keys:
         FEED_FORWARD_LENGTH = "clip.audio.feed_forward_length"
         PROJECTION_DIM      = "clip.audio.projection_dim"
         BLOCK_COUNT         = "clip.audio.block_count"
+        N_WINDOW            = "clip.audio.n_window"
 
         class Attention:
             HEAD_COUNT      = "clip.audio.attention.head_count"

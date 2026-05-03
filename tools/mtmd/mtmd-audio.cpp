@@ -595,7 +595,11 @@ bool mtmd_audio_preprocessor_whisper::preprocess(const float *                 s
     const char * varlen_env = std::getenv("MTMD_QWEN2A_VARLEN");
     const bool enable_varlen = (varlen_env != nullptr && varlen_env[0] != '\0' && varlen_env[0] != '0');
     if (enable_varlen && this->proj_type == PROJECTOR_TYPE_QWEN2A) {
-        constexpr int kChunkPre = 200;
+        // n_window is in mel frames after conv2 (stride-2). Chunks before conv2
+        // are n_window*2 mel frames. Default to 100 (Qwen2.5-Omni standard) if
+        // the gguf doesn't carry the metadata.
+        const int n_window = hparams.audio_n_window > 0 ? hparams.audio_n_window : 100;
+        const int kChunkPre = n_window * 2;
         const int real_mel_frames = static_cast<int>(
             (real_n_samples + hparams.audio_hop_len - 1) / hparams.audio_hop_len
         );
