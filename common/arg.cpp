@@ -580,6 +580,7 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         auto res = common_params_handle_model(params.model, params.hf_token, params.offline);
         if (params.no_mmproj) {
             params.mmproj = {};
+            params.mmproj_aux.clear();
         } else if (res.found_mmproj && params.mmproj.path.empty() && params.mmproj.url.empty()) {
             // optionally, handle mmproj model when -hf is specified
             params.mmproj = res.mmproj;
@@ -587,7 +588,10 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         // only download mmproj if the current example is using it
         for (const auto & ex : mmproj_examples) {
             if (ctx_arg.ex == ex) {
-                common_params_handle_model(params.mmproj,    params.hf_token, params.offline);
+                common_params_handle_model(params.mmproj, params.hf_token, params.offline);
+                for (auto & extra : params.mmproj_aux) {
+                    common_params_handle_model(extra, params.hf_token, params.offline);
+                }
                 break;
             }
         }
@@ -2150,16 +2154,30 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"-mm", "--mmproj"}, "FILE",
         "path to a multimodal projector file. see tools/mtmd/README.md\n"
+        "may be passed more than once (e.g. one vision mmproj + one audio mmproj for v5-omni)\n"
         "note: if -hf is used, this argument can be omitted",
         [](common_params & params, const std::string & value) {
-            params.mmproj.path = value;
+            if (params.mmproj.path.empty() && params.mmproj.url.empty() && params.mmproj.hf_repo.empty()) {
+                params.mmproj.path = value;
+            } else {
+                common_params_model extra;
+                extra.path = value;
+                params.mmproj_aux.push_back(extra);
+            }
         }
     ).set_examples(mmproj_examples).set_env("LLAMA_ARG_MMPROJ"));
     add_opt(common_arg(
         {"-mmu", "--mmproj-url"}, "URL",
-        "URL to a multimodal projector file. see tools/mtmd/README.md",
+        "URL to a multimodal projector file. see tools/mtmd/README.md\n"
+        "may be passed more than once",
         [](common_params & params, const std::string & value) {
-            params.mmproj.url = value;
+            if (params.mmproj.path.empty() && params.mmproj.url.empty() && params.mmproj.hf_repo.empty()) {
+                params.mmproj.url = value;
+            } else {
+                common_params_model extra;
+                extra.url = value;
+                params.mmproj_aux.push_back(extra);
+            }
         }
     ).set_examples(mmproj_examples).set_env("LLAMA_ARG_MMPROJ_URL"));
     add_opt(common_arg(

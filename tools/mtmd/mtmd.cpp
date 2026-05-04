@@ -184,7 +184,7 @@ struct mtmd_context {
 
     // TODO @ngxson : add timings
 
-    mtmd_context(const char * mmproj_fname,
+    mtmd_context(const std::vector<std::string> & mmproj_fnames,
                    const llama_model * text_model,
                    const mtmd_context_params & ctx_params) :
         text_model   (text_model),
@@ -199,6 +199,10 @@ struct mtmd_context {
 
         if (media_marker.empty()) {
             throw std::runtime_error("media_marker must not be empty");
+        }
+
+        if (mmproj_fnames.empty()) {
+            throw std::runtime_error("at least one mmproj file is required");
         }
 
         auto decoder_rope_type = llama_model_rope_type(text_model);
@@ -228,11 +232,33 @@ struct mtmd_context {
             /* cb_eval_user_data */ ctx_params.cb_eval_user_data,
         };
 
-        auto res = clip_init(mmproj_fname, ctx_clip_params);
-        ctx_v = res.ctx_v;
-        ctx_a = res.ctx_a;
-        if (!ctx_v && !ctx_a) {
-            throw std::runtime_error(string_format("Failed to load CLIP model from %s\n", mmproj_fname));
+        // load each mmproj file and accumulate at most one vision and one audio context.
+        // a single mmproj may itself contain both modalities (legacy combined mmprojs),
+        // or modalities may arrive split across files (v5-omni publishes vision and audio
+        // as separate mmprojs to support selective modality loading).
+        ctx_v = nullptr;
+        ctx_a = nullptr;
+        for (const auto & fname : mmproj_fnames) {
+            auto res = clip_init(fname.c_str(), ctx_clip_params);
+            if (!res.ctx_v && !res.ctx_a) {
+                throw std::runtime_error(string_format("Failed to load CLIP model from %s\n", fname.c_str()));
+            }
+            if (res.ctx_v) {
+                if (ctx_v) {
+                    throw std::runtime_error(string_format(
+                        "duplicate vision mmproj: '%s' provides vision but a vision mmproj was already loaded",
+                        fname.c_str()));
+                }
+                ctx_v = res.ctx_v;
+            }
+            if (res.ctx_a) {
+                if (ctx_a) {
+                    throw std::runtime_error(string_format(
+                        "duplicate audio mmproj: '%s' provides audio but an audio mmproj was already loaded",
+                        fname.c_str()));
+                }
+                ctx_a = res.ctx_a;
+            }
         }
 
         // if both vision and audio mmproj are present, we need to validate their n_embd
@@ -646,7 +672,24 @@ mtmd_context * mtmd_init_from_file(const char * mmproj_fname,
         const struct llama_model * text_model,
         const struct mtmd_context_params ctx_params) {
     try {
-        return new mtmd_context(mmproj_fname, text_model, ctx_params);
+        return new mtmd_context(std::vector<std::string>{mmproj_fname}, text_model, ctx_params);
+    } catch (const std::exception & e) {
+        LOG_ERR("%s: error: %s\n", __func__, e.what());
+        return nullptr;
+    }
+}
+
+mtmd_context * mtmd_init_from_files(const char ** mmproj_fnames,
+        size_t n_mmproj_fnames,
+        const struct llama_model * text_model,
+        const struct mtmd_context_params ctx_params) {
+    try {
+        std::vector<std::string> fnames;
+        fnames.reserve(n_mmproj_fnames);
+        for (size_t i = 0; i < n_mmproj_fnames; ++i) {
+            fnames.emplace_back(mmproj_fnames[i]);
+        }
+        return new mtmd_context(fnames, text_model, ctx_params);
     } catch (const std::exception & e) {
         LOG_ERR("%s: error: %s\n", __func__, e.what());
         return nullptr;

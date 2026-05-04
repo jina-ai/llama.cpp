@@ -542,6 +542,10 @@ struct common_params {
 
     // multimodal models (see tools/mtmd)
     struct common_params_model mmproj;
+    // additional mmproj files: when --mmproj / --mmproj-url is given more than once
+    // (e.g. one vision-mmproj + one audio-mmproj for v5-omni), the first goes into
+    // `mmproj` above and the rest are accumulated here.
+    std::vector<struct common_params_model> mmproj_aux;
     bool mmproj_use_gpu = true;     // use GPU for multimodal model
     bool no_mmproj = false;         // explicitly disable multimodal model
     std::vector<std::string> image; // path to image file(s)

@@ -804,8 +804,16 @@ private:
             params_base.speculative.cparams_dft = common_context_params_to_llama(params_dft);
         }
 
-        std::string & mmproj_path = params_base.mmproj.path;
-        if (!mmproj_path.empty()) {
+        std::vector<std::string> mmproj_paths;
+        if (!params_base.mmproj.path.empty()) {
+            mmproj_paths.push_back(params_base.mmproj.path);
+        }
+        for (const auto & extra : params_base.mmproj_aux) {
+            if (!extra.path.empty()) {
+                mmproj_paths.push_back(extra.path);
+            }
+        }
+        if (!mmproj_paths.empty()) {
             if (!is_resume) {
                 mtmd_helper_log_set(common_log_default_callback, nullptr);
             }
@@ -821,12 +829,23 @@ private:
             mparams.image_max_tokens = params_base.image_max_tokens;
             mparams.media_marker     = get_media_marker();
 
-            mctx = mtmd_init_from_file(mmproj_path.c_str(), model, mparams);
+            std::vector<const char *> mmproj_paths_c;
+            mmproj_paths_c.reserve(mmproj_paths.size());
+            for (const auto & p : mmproj_paths) {
+                mmproj_paths_c.push_back(p.c_str());
+            }
+            mctx = mtmd_init_from_files(mmproj_paths_c.data(), mmproj_paths_c.size(), model, mparams);
+
+            std::string joined_paths;
+            for (size_t i = 0; i < mmproj_paths.size(); ++i) {
+                if (i) joined_paths += ", ";
+                joined_paths += mmproj_paths[i];
+            }
             if (mctx == nullptr) {
-                SRV_ERR("failed to load multimodal model, '%s'\n", mmproj_path.c_str());
+                SRV_ERR("failed to load multimodal model(s), '%s'\n", joined_paths.c_str());
                 return false;
             }
-            SRV_INF("loaded multimodal model, '%s'\n", mmproj_path.c_str());
+            SRV_INF("loaded multimodal model(s), '%s'\n", joined_paths.c_str());
 
             if (params_base.ctx_shift) {
                 params_base.ctx_shift = false;

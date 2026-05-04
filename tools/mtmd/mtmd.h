@@ -102,11 +102,19 @@ MTMD_API const char * mtmd_default_marker(void);
 
 MTMD_API struct mtmd_context_params mtmd_context_params_default(void);
 
-// initialize the mtmd context
+// initialize the mtmd context from a single mmproj gguf
 // return nullptr on failure
 MTMD_API mtmd_context * mtmd_init_from_file(const char * mmproj_fname,
                                             const struct llama_model * text_model,
                                             const struct mtmd_context_params ctx_params);
+
+// initialize the mtmd context from multiple mmproj gguf files (e.g. a vision mmproj
+// plus an audio mmproj for v5-omni). At most one of each modality may be provided.
+// return nullptr on failure
+MTMD_API mtmd_context * mtmd_init_from_files(const char ** mmproj_fnames,
+                                             size_t n_mmproj_fnames,
+                                             const struct llama_model * text_model,
+                                             const struct mtmd_context_params ctx_params);
 
 MTMD_API void mtmd_free(mtmd_context * ctx);
 

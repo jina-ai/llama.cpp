@@ -134,7 +134,20 @@ struct mtmd_cli_context {
     }
 
     void init_vision_context(common_params & params) {
-        const char * clip_path = params.mmproj.path.c_str();
+        std::vector<std::string> clip_paths;
+        if (!params.mmproj.path.empty()) {
+            clip_paths.push_back(params.mmproj.path);
+        }
+        for (const auto & extra : params.mmproj_aux) {
+            if (!extra.path.empty()) {
+                clip_paths.push_back(extra.path);
+            }
+        }
+        std::vector<const char *> clip_paths_c;
+        clip_paths_c.reserve(clip_paths.size());
+        for (const auto & p : clip_paths) {
+            clip_paths_c.push_back(p.c_str());
+        }
         mtmd_context_params mparams = mtmd_context_params_default();
         mparams.use_gpu          = params.mmproj_use_gpu;
         mparams.print_timings    = true;
@@ -147,9 +160,14 @@ struct mtmd_cli_context {
             mparams.cb_eval_user_data = &cb_data;
             mparams.cb_eval = common_debug_cb_eval;
         }
-        ctx_vision.reset(mtmd_init_from_file(clip_path, model, mparams));
+        ctx_vision.reset(mtmd_init_from_files(clip_paths_c.data(), clip_paths_c.size(), model, mparams));
         if (!ctx_vision.get()) {
-            LOG_ERR("Failed to load vision model from %s\n", clip_path);
+            std::string joined;
+            for (size_t i = 0; i < clip_paths.size(); ++i) {
+                if (i) joined += ", ";
+                joined += clip_paths[i];
+            }
+            LOG_ERR("Failed to load mmproj model(s): %s\n", joined.c_str());
             exit(1);
         }
     }
