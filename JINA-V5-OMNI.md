@@ -46,6 +46,7 @@ Conv3d patch embed handles the temporal dimension natively when
 ## Patches in this branch
 
 ```
+1cfc842 mtmd: multi-mmproj support for selective modality loading
 f23e08e mtmd: separate video_min/max_pixels for qwen3vl video frames
 1b91bac audio: read clip.audio.n_window from gguf metadata
 e192d1b mtmd: native Qwen3VL video parity via temporal-pair patch_embed
@@ -235,9 +236,9 @@ order they appear in the prompt; the server routes by media type.
   -b 4096 -ub 4096
 ```
 
-The audio mmproj is a separate file from the vision mmproj. To use both
-modalities at once you can serve two endpoints (one per mmproj) — the
-runtime currently loads at most one mmproj per server process.
+The audio mmproj is a separate file from the vision mmproj. To serve
+both at once from a single process, pass `--mmproj` twice (see
+"Selective modality loading" below).
 
 The `-b 4096 -ub 4096` flags bump the physical batch size since audio
 prompts can expand to ~750 tokens for a 30s clip (the audio path inserts
@@ -263,6 +264,37 @@ The `<__media__>` placeholder is replaced server-side with the right
 sequence of audio tokens (wrapped in `<|audio_start|>` / `<|audio_end|>`
 boundary tokens). Audio is resampled to 16kHz mono internally; supported
 input formats are WAV, MP3, and FLAC (via `miniaudio`).
+
+### Selective modality loading (multi-mmproj)
+
+v5-omni publishes vision and audio as separate mmproj files so callers
+only pay for the modalities they actually use. The runtime accepts
+`--mmproj` more than once; pass at most one vision mmproj and at most
+one audio mmproj. This mirrors the HF `modality=` argument:
+
+| HF                   | flags                                                                |
+| -------------------- | -------------------------------------------------------------------- |
+| `modality="text"`    | `-m text.gguf`                                                       |
+| `modality="vision"`  | `-m text.gguf --mmproj vision-mmproj.gguf`                           |
+| `modality="audio"`   | `-m text.gguf --mmproj audio-mmproj.gguf`                            |
+| `modality="omni"`    | `-m text.gguf --mmproj vision-mmproj.gguf --mmproj audio-mmproj.gguf`|
+
+Combined invocation example:
+
+```bash
+./build/bin/llama-server \
+  -m         jina-embeddings-v5-omni-small-retrieval-F16.gguf \
+  --mmproj   jina-embeddings-v5-omni-small-retrieval-vision-mmproj-F16.gguf \
+  --mmproj   jina-embeddings-v5-omni-small-retrieval-audio-mmproj-F16.gguf \
+  --embedding --pooling last \
+  --host 127.0.0.1 --port 8080 \
+  -b 8192 -ub 8192
+```
+
+Image and audio embeddings produced this way are bit-identical to the
+single-mmproj invocations — the encoder graph is the same regardless of
+whether the other modality's projector is also loaded. Passing two
+vision mmprojs (or two audio mmprojs) is rejected at startup.
 
 ## Notes
 
