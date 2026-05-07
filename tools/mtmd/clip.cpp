@@ -1360,6 +1360,13 @@ struct clip_model_loader {
                         // Default RESIZE_ALGO_BILINEAR diverges from PIL on extreme upscale
                         // (e.g. 32x32 -> 512x512 caps embedding cos at ~0.96 vs torch).
                         hparams.image_resize_algo = RESIZE_ALGO_BICUBIC_PILLOW;
+                        // calc_size_preserved_ratio already returns aspect-preserved target dims,
+                        // so we don't want img_tool::resize's min-scale + center-pad path. With
+                        // padding enabled, the second resize-step's ceil rounding can shrink the
+                        // resized image by 1 pixel and leave a black column at the boundary
+                        // (max_abs_diff up to 2.0 vs torch). Disable padding to match torch's
+                        // direct PIL bicubic resize.
+                        hparams.image_resize_pad = false;
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
                         get_u32(KEY_WIN_ATTN_PATTERN, hparams.n_wa_pattern, model.proj_type == PROJECTOR_TYPE_QWEN25VL); // only 2.5 requires it
                         // ref: https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/blob/main/preprocessor_config.json
