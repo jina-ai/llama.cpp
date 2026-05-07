@@ -266,6 +266,12 @@ void clip_graph::cb(ggml_tensor * cur, const char * name, int il) const {
     } else {
         ggml_set_name(cur, name);
     }
+    // When MTMD_DEBUG_DUMP_INTERMEDIATES=<dir> is set, mark the tensor as an
+    // output so its data survives compute and we can dump it post-compute for
+    // offline parity work against the torch reference.
+    if (std::getenv("MTMD_DEBUG_DUMP_INTERMEDIATES") != nullptr) {
+        ggml_set_output(cur);
+    }
 }
 
 // siglip2 naflex
@@ -3888,6 +3894,52 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     if (status != GGML_STATUS_SUCCESS) {
         LOG_ERR("%s: ggml_backend_sched_graph_compute failed with error %d\n", __func__, status);
         return false;
+    }
+
+    // Optional: dump every named graph tensor to <dir>/<name>.bin for offline
+    // per-layer parity diffing. Triggered by MTMD_DEBUG_DUMP_INTERMEDIATES=<dir>.
+    // Format per file: int32 ggml_type, int64 ne[4], then ggml_nbytes() raw bytes.
+    if (const char * dump_dir = std::getenv("MTMD_DEBUG_DUMP_INTERMEDIATES")) {
+        auto dump_tensor = [&](ggml_tensor * t) -> bool {
+            if (t == nullptr) return false;
+            const char * tname = ggml_get_name(t);
+            if (tname == nullptr || tname[0] == '\0') return false;
+
+            char path[1024];
+            std::snprintf(path, sizeof(path), "%s/%s.bin", dump_dir, tname);
+            FILE * fp = std::fopen(path, "wb");
+            if (fp == nullptr) {
+                LOG_WRN("MTMD_DEBUG_DUMP_INTERMEDIATES: fopen('%s') failed\n", path);
+                return false;
+            }
+            const int32_t gtype = (int32_t) t->type;
+            std::fwrite(&gtype, sizeof(int32_t), 1, fp);
+            int64_t ne[4] = { t->ne[0], t->ne[1], t->ne[2], t->ne[3] };
+            std::fwrite(ne, sizeof(int64_t), 4, fp);
+            const size_t nbytes = ggml_nbytes(t);
+            std::vector<uint8_t> buf(nbytes);
+            ggml_backend_tensor_get(t, buf.data(), 0, nbytes);
+            std::fwrite(buf.data(), 1, nbytes, fp);
+            std::fclose(fp);
+            return true;
+        };
+
+        int dumped = 0;
+        // Graph nodes (computed tensors marked as output via cb)
+        const int n_nodes = ggml_graph_n_nodes(gf);
+        for (int i = 0; i < n_nodes; ++i) {
+            ggml_tensor * t = ggml_graph_node(gf, i);
+            if (t == nullptr) continue;
+            if ((t->flags & GGML_TENSOR_FLAG_OUTPUT) == 0) continue;
+            if (dump_tensor(t)) ++dumped;
+        }
+        // Specific input tensors by name (graph leaves aren't iterable via public API).
+        // `inp_raw` is the pre-conv pixel data; useful for diffing image preprocessing.
+        for (const char * name : {"inp_raw", "inp_raw_b", "positions"}) {
+            ggml_tensor * t = ggml_graph_get_tensor(gf, name);
+            if (t != nullptr && dump_tensor(t)) ++dumped;
+        }
+        LOG_INF("MTMD_DEBUG_DUMP_INTERMEDIATES: wrote %d tensors to %s\n", dumped, dump_dir);
     }
 
     // the last node is the embedding tensor

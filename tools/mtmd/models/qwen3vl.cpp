@@ -19,6 +19,9 @@ ggml_cgraph * clip_graph_qwen3vl::build() {
     // sets `inp_raw_b` = `inp_raw`); video frame-pair mode feeds distinct
     // frames so the graph computes torch's `w0*frame_a + w1*frame_b` exactly.
     ggml_tensor * inp_raw   = build_inp_raw();
+    if (std::getenv("MTMD_DEBUG_DUMP_INTERMEDIATES") != nullptr) {
+        ggml_set_output(inp_raw);  // preserve pre-conv pixel data for offline diff
+    }
     ggml_tensor * inp_raw_b = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, img.nx, img.ny, 3);
     ggml_set_name(inp_raw_b, "inp_raw_b");
     ggml_set_input(inp_raw_b);
